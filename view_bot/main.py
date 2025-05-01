@@ -28,4 +28,4 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"message": "Hello FastAPI !!!"}
+    return {"message": "Hello FastAPI !!"}
