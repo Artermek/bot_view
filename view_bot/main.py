@@ -1,26 +1,31 @@
-import base64
-from openai import OpenAI
+import asyncio
+import json
 
-base64_image = 1
+import os
 
-client = OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Ты ведущий нейропсихолог с опытом работы 20 лет. Можешь провести оценку проективных методик ребенка по рисунку?",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                },
-            ],
-        }
-    ],
+
+from fastapi import UploadFile, File
+import httpx
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from typing import Dict
+
+
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-print(response.choices[0])
+
+@app.get("/")
+def root():
+    return {"message": "Hello FastAPI !!!"}
