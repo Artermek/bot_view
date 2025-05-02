@@ -1,10 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from typing import List
+import os
+import base64
+import asyncio
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
-import base64
-import os
 
+# Если хотите хранить OPENAI_API_KEY в .env локально:
+from dotenv import load_dotenv
 app = FastAPI()
 
 # CORS
