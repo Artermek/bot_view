@@ -116,35 +116,40 @@ II. Анализ деталей фигуры:
 """.strip()
 
 @app.post("/upload")
-async def upload_three_images(
-    file1: UploadFile = File(...),
-    file2: UploadFile = File(...),
-    file3: UploadFile = File(...)
-):
+async def upload_images(files: List[UploadFile] = File(...)):
     """
-    Принимает одновременно три файла:
-      - file1: «Дом, дерево, человек»
-      - file2: «Несуществующее животное»
-      - file3: «Автопортрет»
-
-    Возвращает JSON:
+    Принимает в form-data:
+      files: UploadFile (ровно 3 файла, переданные трижды под одним именем)
+    Возвращает:
       { "analyses": [ответ1, ответ2, ответ3] }
     """
-    # Шагаем по каждому файлу, читаем и кодируем в base64
-    inputs = [
-        (file1, PROMPT_HOUSE_TREE_PERSON, 1),
-        (file2, PROMPT_ANIMAL,             2),
-        (file3, PROMPT_SELF_PORTRAIT,      3),
+    # Проверяем, что прислали ровно 3 файла
+    if len(files) != 3:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Нужно ровно 3 файла, пришло {len(files)}"
+        )
+
+    # Сопоставляем каждому файлу свой промпт
+    prompts = [
+        PROMPT_HOUSE_TREE_PERSON,
+        PROMPT_ANIMAL,
+        PROMPT_SELF_PORTRAIT,
     ]
+
+    # Подготовка: читаем и кодируем base64
     prepared = []
-    for file, prompt, idx in inputs:
+    for idx, (file, prompt) in enumerate(zip(files, prompts), start=1):
         if not file.content_type.startswith("image/"):
-            raise HTTPException(400, f"file{idx} не изображение: {file.content_type}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Файл #{idx} не является изображением: {file.content_type}"
+            )
         data = await file.read()
         b64 = base64.b64encode(data).decode("utf-8")
         prepared.append((file.content_type, b64, prompt, idx))
 
-    # Асинхронная обёртка для вызова OpenAI в ThreadPool
+    # Функция-обёртка для синхронного OpenAI в executor
     async def analyze(content_type: str, b64: str, prompt: str, idx: int):
         loop = asyncio.get_running_loop()
         try:
@@ -152,27 +157,28 @@ async def upload_three_images(
                 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{content_type};base64,{b64}"}
-                                },
-                            ],
-                        }
-                    ],
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{content_type};base64,{b64}"}
+                            },
+                        ],
+                    }]
                 )
                 return resp.choices[0].message.content
-            # Запускаем в отдельном потоке, чтобы не блокировать event loop
+
             return await loop.run_in_executor(None, call_openai)
         except Exception as e:
-            return f"Ошибка анализа file{idx}: {e}"
+            return f"Ошибка анализа файла #{idx}: {e}"
 
-    # Стартуем все три задачи параллельно
-    tasks = [analyze(ct, b64, prmpt, idx) for ct, b64, prmpt, idx in prepared]
+    # Запускаем все три анализа параллельно
+    tasks = [
+        analyze(ct, b64, prmpt, idx)
+        for ct, b64, prmpt, idx in prepared
+    ]
     results = await asyncio.gather(*tasks)
 
     return JSONResponse(content={"analyses": results})
