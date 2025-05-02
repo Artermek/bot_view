@@ -116,57 +116,63 @@ II. Анализ деталей фигуры:
 """.strip()
 
 @app.post("/upload")
-async def upload_image(
-    file: UploadFile = File(...),
-    category: str = Form(...)
+async def upload_three_images(
+    file1: UploadFile = File(...),
+    file2: UploadFile = File(...),
+    file3: UploadFile = File(...)
 ):
     """
-    Принимает:
-     - file: картинку,
-     - category: одна из строк:
-         'house'  — Дом, дерево, человек
-         'animal' — Несуществующее животное
-         'self'   — Автопортрет
+    Принимает одновременно три файла:
+      - file1: «Дом, дерево, человек»
+      - file2: «Несуществующее животное»
+      - file3: «Автопортрет»
+
+    Возвращает JSON:
+      { "analyses": [ответ1, ответ2, ответ3] }
     """
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Файл должен быть изображением")
+    # Шагаем по каждому файлу, читаем и кодируем в base64
+    inputs = [
+        (file1, PROMPT_HOUSE_TREE_PERSON, 1),
+        (file2, PROMPT_ANIMAL,             2),
+        (file3, PROMPT_SELF_PORTRAIT,      3),
+    ]
+    prepared = []
+    for file, prompt, idx in inputs:
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(400, f"file{idx} не изображение: {file.content_type}")
+        data = await file.read()
+        b64 = base64.b64encode(data).decode("utf-8")
+        prepared.append((file.content_type, b64, prompt, idx))
 
-    # Выбор промпта по категории
-    if category == "house":
-        prompt = PROMPT_HOUSE_TREE_PERSON
-    elif category == "animal":
-        prompt = PROMPT_ANIMAL
-    elif category == "self":
-        prompt = PROMPT_SELF_PORTRAIT
-    else:
-        raise HTTPException(status_code=400, detail="Неверная категория")
-
-    try:
-        image_data = await file.read()
-        b64 = base64.b64encode(image_data).decode("utf-8")
-
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
+    # Асинхронная обёртка для вызова OpenAI в ThreadPool
+    async def analyze(content_type: str, b64: str, prompt: str, idx: int):
+        loop = asyncio.get_running_loop()
+        try:
+            def call_openai():
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{file.content_type};base64,{b64}"
-                            }
-                        },
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{content_type};base64,{b64}"}
+                                },
+                            ],
+                        }
                     ],
-                }
-            ],
-        )
+                )
+                return resp.choices[0].message.content
+            # Запускаем в отдельном потоке, чтобы не блокировать event loop
+            return await loop.run_in_executor(None, call_openai)
+        except Exception as e:
+            return f"Ошибка анализа file{idx}: {e}"
 
-        analysis = response.choices[0].message.content
-        print (analysis)
-        return JSONResponse(content={"analysis": analysis})
+    # Стартуем все три задачи параллельно
+    tasks = [analyze(ct, b64, prmpt, idx) for ct, b64, prmpt, idx in prepared]
+    results = await asyncio.gather(*tasks)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка обработки запроса: {e}")
+    return JSONResponse(content={"analyses": results})
