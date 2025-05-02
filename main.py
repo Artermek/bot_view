@@ -165,6 +165,7 @@ async def upload_image(
         )
 
         analysis = response.choices[0].message.content
+        print (analysis)
         return JSONResponse(content={"analysis": analysis})
 
     except Exception as e:
