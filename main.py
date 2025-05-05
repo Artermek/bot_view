@@ -384,6 +384,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
 
     try:
         analysis = await loop.run_in_executor(None, call_openai)
+        print(analysis)
         return JSONResponse(content={"analysis": analysis})
     except Exception as e:
         raise HTTPException(500, detail=f"Ошибка обработки запроса: {e}")
