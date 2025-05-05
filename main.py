@@ -377,7 +377,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
     def call_openai():
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-2025-04-14",
             messages=[{"role": "user", "content": content}],
         )
         return resp.choices[0].message.content
