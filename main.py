@@ -338,52 +338,52 @@ PROMPT_SELF_PORTRAIT = """
 @app.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
     """
-    Принимает ровно 3 файла под ключом 'files' и возвращает список из 3 ответов.
+    Ожидает в form-data ровно 3 файла под ключом 'files'.
+    Возвращает JSON { "analysis": "<единый текст анализа трёх рисунков>" }.
     """
     if len(files) != 3:
         raise HTTPException(400, f"Ожидалось 3 файла, пришло {len(files)}")
 
-    prompts = [
-        PROMPT_HOUSE_TREE_PERSON,
-        PROMPT_ANIMAL,
-        PROMPT_SELF_PORTRAIT,
-    ]
-
-    # Считываем и кодируем
-    prepared = []
-    for idx, (file, prompt) in enumerate(zip(files, prompts), start=1):
+    # Проверяем и кодируем каждое изображение
+    encoded = []
+    for idx, file in enumerate(files, start=1):
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, f"file#{idx} не изображение: {file.content_type}")
         data = await file.read()
         b64 = base64.b64encode(data).decode("utf-8")
-        prepared.append((file.content_type, b64, prompt, idx))
+        encoded.append((file.content_type, b64))
 
-    # Асинхронный вызов OpenAI в пуле потоков
-    async def analyze(content_type, b64, prompt, idx):
-        loop = asyncio.get_running_loop()
-        def call_openai():
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            resp = client.chat.completions.create(
-                model="gpt-4.1-2025-04-14",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:{content_type};base64,{b64}"
-                        }}
-                    ]
-                }]
-            )
-            return resp.choices[0].message.content
+    # Привязываем каждый prompt к своему изображению явно
+    prompts = [
+        ("Рисунок 1 (Дом/Дерево/Человек)", PROMPT_HOUSE_TREE_PERSON),
+        ("Рисунок 2 (Несуществующее животное)", PROMPT_ANIMAL),
+        ("Рисунок 3 (Автопортрет)", PROMPT_SELF_PORTRAIT),
+    ]
 
-        try:
-            return await loop.run_in_executor(None, call_openai)
-        except Exception as e:
-            return f"Ошибка анализа файла #{idx}: {e}"
+    # Составляем content: чередуем text + image_url
+    content = []
+    for (title, prompt), (ct, b64) in zip(prompts, encoded):
+        content.append({
+            "type": "text",
+            "text": f"{title}:\n{prompt}"
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{ct};base64,{b64}"}
+        })
 
-    # Параллельно
-    tasks = [analyze(ct, b64, prmpt, idx) for ct, b64, prmpt, idx in prepared]
-    results = await asyncio.gather(*tasks)
+    # Одно обращение к OpenAI
+    loop = asyncio.get_running_loop()
+    def call_openai():
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": content}],
+        )
+        return resp.choices[0].message.content
 
-    return JSONResponse({"analyses": results})
+    try:
+        analysis = await loop.run_in_executor(None, call_openai)
+        return JSONResponse(content={"analysis": analysis})
+    except Exception as e:
+        raise HTTPException(500, detail=f"Ошибка обработки запроса: {e}")
