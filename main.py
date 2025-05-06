@@ -335,16 +335,54 @@ PROMPT_SELF_PORTRAIT = """
 
 """.strip()
 
-@app.post("/upload")
-async def upload_images(files: List[UploadFile] = File(...)):
+task_store = {}
+
+def process_images(task_id: str, encoded: List[tuple]):
     """
-    Ожидает в form-data ровно 3 файла под ключом 'files'.
-    Возвращает JSON { "analysis": "<единый текст анализа трёх рисунков>" }.
+    Фоновая функция: получает список (content_type, base64) и
+    пишет результат в task_store[task_id].
+    """
+    # Составляем content для OpenAI
+    prompts = [
+        ("Рисунок 1 (Дом/Дерево/Человек)", PROMPT_HOUSE_TREE_PERSON),
+        ("Рисунок 2 (Несуществующее животное)", PROMPT_ANIMAL),
+        ("Рисунок 3 (Автопортрет)", PROMPT_SELF_PORTRAIT),
+    ]
+
+    content = []
+    for (title, prompt), (ct, b64) in zip(prompts, encoded):
+        content.append({"type": "text", "text": f"{title}:\n{prompt}"})
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{ct};base64,{b64}"}
+        })
+
+    # Вызываем OpenAI синхронно
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        resp = client.chat.completions.create(
+            model="gpt-4.1-2025-04-14",
+            messages=[{"role": "user", "content": content}],
+        )
+        result = resp.choices[0].message.content
+        task_store[task_id] = {"status": "done", "result": result}
+    except Exception as e:
+        task_store[task_id] = {"status": "error", "error": str(e)}
+
+
+@app.post("/upload")
+async def upload_images(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...)
+):
+    """
+    Принимает ровно 3 файла под ключом 'files', сразу возвращает task_id.
+    Фоново обрабатывает OpenAI и сохраняет результат в памяти.
     """
     if len(files) != 3:
         raise HTTPException(400, f"Ожидалось 3 файла, пришло {len(files)}")
 
-    # Проверяем и кодируем каждое изображение
+    # Кодируем изображения
     encoded = []
     for idx, file in enumerate(files, start=1):
         if not file.content_type.startswith("image/"):
@@ -353,38 +391,28 @@ async def upload_images(files: List[UploadFile] = File(...)):
         b64 = base64.b64encode(data).decode("utf-8")
         encoded.append((file.content_type, b64))
 
-    # Привязываем каждый prompt к своему изображению явно
-    prompts = [
-        ("Рисунок 1 (Дом/Дерево/Человек)", PROMPT_HOUSE_TREE_PERSON),
-        ("Рисунок 2 (Несуществующее животное)", PROMPT_ANIMAL),
-        ("Рисунок 3 (Автопортрет)", PROMPT_SELF_PORTRAIT),
-    ]
+    # Создаём уникальный ID задачи
+    task_id = uuid.uuid4().hex
+    # Сразу кладём в store статус pending
+    task_store[task_id] = {"status": "pending"}
 
-    # Составляем content: чередуем text + image_url
-    content = []
-    for (title, prompt), (ct, b64) in zip(prompts, encoded):
-        content.append({
-            "type": "text",
-            "text": f"{title}:\n{prompt}"
-        })
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{ct};base64,{b64}"}
-        })
+    # Запускаем фоновую задачу
+    background_tasks.add_task(process_images, task_id, encoded)
 
-    # Одно обращение к OpenAI
-    loop = asyncio.get_running_loop()
-    def call_openai():
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        resp = client.chat.completions.create(
-            model="gpt-4.1-2025-04-14",
-            messages=[{"role": "user", "content": content}],
-        )
-        return resp.choices[0].message.content
+    # Возвращаем task_id клиенту
+    return JSONResponse(
+        status_code=202,
+        content={"task_id": task_id}
+    )
 
-    try:
-        analysis = await loop.run_in_executor(None, call_openai)
-        print(analysis)
-        return JSONResponse(content={"analysis": analysis})
-    except Exception as e:
-        raise HTTPException(500, detail=f"Ошибка обработки запроса: {e}")
+
+@app.get("/status/{task_id}")
+async def get_status(task_id: str):
+    """
+    Клиент опрашивает этот эндпоинт, чтобы узнать готов ли анализ.
+    Если status="done", вернёт поле result.
+    """
+    task = task_store.get(task_id)
+    if not task:
+        raise HTTPException(404, "task_id не найден")
+    return task
