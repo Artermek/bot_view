@@ -366,6 +366,7 @@ def process_images(task_id: str, encoded: List[tuple]):
         )
         result = resp.choices[0].message.content
         task_store[task_id] = {"status": "done", "result": result}
+        print (result)
     except Exception as e:
         task_store[task_id] = {"status": "error", "error": str(e)}
 
