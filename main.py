@@ -410,10 +410,12 @@ async def upload_images(
 @app.get("/status/{task_id}")
 async def get_status(task_id: str):
     """
-    Клиент опрашивает этот эндпоинт, чтобы узнать готов ли анализ.
-    Если status="done", вернёт поле result.
+    Клиент опрашивает этот эндпоинт.
+    Везде возвращаем JSON со status (pending|done|error).
+    Никогда не 404.
     """
     task = task_store.get(task_id)
-    if not task:
-        raise HTTPException(404, "task_id не найден")
+    if task is None:
+        # Если задача ещё не зашла в store или уже выпала — считаем, что она в работе
+        return {"status": "pending"}
     return task
