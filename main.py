@@ -7,6 +7,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
+import threading
 
 # Если хотите хранить OPENAI_API_KEY в .env локально:
 from dotenv import load_dotenv
@@ -420,54 +421,41 @@ II. Анализ деталей фигуры:
 """.strip()
 
 task_store = {}
+lock = threading.Lock()
 
-def process_images(task_id: str, encoded: List[tuple]):
+def process_image(task_id: str, image_key: str, ct: str, b64: str, prompt: str):
     """
-    Фоновая функция: получает список (content_type, base64) и
-    пишет результат в task_store[task_id].
+    Отправляет одно изображение с промптом в OpenAI и сохраняет результат в task_store.
     """
-    # Составляем content для OpenAI
-    prompts = [
-        ("Рисунок 1 (Дом/Дерево/Человек)", PROMPT_HOUSE_TREE_PERSON),
-        ("Рисунок 2 (Несуществующее животное)", PROMPT_ANIMAL),
-        ("Рисунок 3 (Автопортрет)", PROMPT_SELF_PORTRAIT),
-    ]
-
-    content = []
-    for (title, prompt), (ct, b64) in zip(prompts, encoded):
-        content.append({"type": "text", "text": f"{title}:\n{prompt}"})
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{ct};base64,{b64}"}
-        })
-
-    # Вызываем OpenAI синхронно
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}}
+        ]
         resp = client.chat.completions.create(
-            model="gpt-4.1-2025-04-14",
+            model="gpt-4o",  # Используйте актуальную модель
             messages=[{"role": "user", "content": content}],
         )
         result = resp.choices[0].message.content
-        task_store[task_id] = {"status": "done", "result": result}
-        print (result)
+        with lock:
+            task_store[task_id]["results"][image_key] = result
+            # Проверяем, все ли результаты получены
+            if all(task_store[task_id]["results"].values()):
+                task_store[task_id]["status"] = "done"
     except Exception as e:
-        task_store[task_id] = {"status": "error", "error": str(e)}
-
+        with lock:
+            task_store[task_id]["results"][image_key] = {"error": str(e)}
+            task_store[task_id]["status"] = "error"
 
 @app.post("/upload")
 async def upload_images(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...)
 ):
-    """
-    Принимает ровно 3 файла под ключом 'files', сразу возвращает task_id.
-    Фоново обрабатывает OpenAI и сохраняет результат в памяти.
-    """
     if len(files) != 3:
         raise HTTPException(400, f"Ожидалось 3 файла, пришло {len(files)}")
 
-    # Кодируем изображения
     encoded = []
     for idx, file in enumerate(files, start=1):
         if not file.content_type.startswith("image/"):
@@ -476,30 +464,43 @@ async def upload_images(
         b64 = base64.b64encode(data).decode("utf-8")
         encoded.append((file.content_type, b64))
 
-    # Создаём уникальный ID задачи
     task_id = uuid.uuid4().hex
-    # Сразу кладём в store статус pending
-    task_store[task_id] = {"status": "pending"}
+    with lock:
+        task_store[task_id] = {
+            "status": "pending",
+            "results": {
+                "image1": None,
+                "image2": None,
+                "image3": None
+            }
+        }
 
-    # Запускаем фоновую задачу
-    background_tasks.add_task(process_images, task_id, encoded)
+    prompts = [
+        PROMPT_HOUSE_TREE_PERSON,
+        PROMPT_ANIMAL,
+        PROMPT_SELF_PORTRAIT
+    ]
 
-    # Возвращаем task_id клиенту
+    # Запускаем обработку каждого изображения в отдельной фоновой задаче
+    for i, (ct, b64) in enumerate(encoded):
+        image_key = f"image{i+1}"
+        prompt = prompts[i]
+        background_tasks.add_task(process_image, task_id, image_key, ct, b64, prompt)
+
     return JSONResponse(
         status_code=202,
         content={"task_id": task_id}
     )
 
-
 @app.get("/status/{task_id}")
 async def get_status(task_id: str):
-    """
-    Клиент опрашивает этот эндпоинт.
-    Везде возвращаем JSON со status (pending|done|error).
-    Никогда не 404.
-    """
-    task = task_store.get(task_id)
+    with lock:
+        task = task_store.get(task_id)
     if task is None:
-        # Если задача ещё не зашла в store или уже выпала — считаем, что она в работе
         return {"status": "pending"}
-    return task
+    if task["status"] == "done":
+        return {"status": "done", "results": task["results"]}
+    elif task["status"] == "error":
+        return {"status": "error", "errors": {k: v for k, v in task["results"].items() if isinstance(v, dict) and "error" in v}}
+    else:
+        return {"status": "pending"}
