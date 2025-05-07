@@ -435,7 +435,7 @@ def process_image(task_id: str, image_key: str, ct: str, b64: str, prompt: str):
             {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}}
         ]
         resp = client.chat.completions.create(
-            model="gpt-4o",  # Используйте актуальную модель
+            model="gpt-4.1-2025-04-14",  # Используйте актуальную модель
             messages=[{"role": "user", "content": content}],
         )
         result = resp.choices[0].message.content
