@@ -563,11 +563,69 @@ class SurveyData(BaseModel):
     attentionAreas: Optional[str] = None
     specialists: Optional[str] = None
 
-# Новый эндпоинт для приема анкеты
+# Функция подсчета баллов
+def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
+    """
+    Подсчитывает баллы по каждому разделу анкеты, суммируя значения вопросов.
+    
+    Args:
+        survey_data (Dict[str, str]): Данные анкеты, где значения вопросов представлены строками ("1"–"5").
+    
+    Returns:
+        Dict[str, int]: Словарь с суммами баллов по разделам: {'section_1': int, 'section_2': int, 
+                        'section_3': int, 'section_4': int, 'total': int}.
+    """
+    # Список вопросов по разделам
+    sections = {
+        'section_1': [f'q1_{i}' for i in range(1, 11)],
+        'section_2': [f'q2_{i}' for i in range(1, 11)],
+        'section_3': [f'q3_{i}' for i in range(1, 11)],
+        'section_4': [f'q4_{i}' for i in range(1, 11)]
+    }
+    
+    # Инициализация словаря для хранения баллов
+    scores = {
+        'section_1': 0,
+        'section_2': 0,
+        'section_3': 0,
+        'section_4': 0
+    }
+    
+    # Подсчет баллов по каждому разделу
+    for section, questions in sections.items():
+        for question in questions:
+            score = int(survey_data[question])  # Преобразуем строковое значение в число
+            scores[section] += score
+    
+    # Общий балл
+    scores['total'] = sum(scores[section] for section in sections.keys())
+    
+    return scores
+
+# Обновленный эндпоинт для приема анкеты
 @app.post("/submit-survey")
 async def submit_survey(survey: SurveyData):
-    # Сохранение данных (в данном случае просто вывод в терминал)
+    # Преобразуем данные в словарь
     survey_dict = survey.dict()
+    
+    # Подсчитываем баллы
+    scores = calculate_survey_scores(survey_dict)
+    
+    # Выводим данные анкеты и баллы в терминал
     print("Получены данные анкеты:")
     print(survey_dict)
-    return {"message": "Анкета успешно отправлена"}
+    print("Баллы по разделам:")
+    print(scores)
+    
+    # Возвращаем ответ с баллами
+    return {
+        "message": "Анкета успешно отправлена",
+        "scores": {
+            "Эмоциональная сфера": scores['section_1'],
+            "Социальное взаимодействие": scores['section_2'],
+            "Саморегуляция и поведение": scores['section_3'],
+            "Самооценка и уверенность": scores['section_4'],
+            "Общий балл": scores['total']
+        }
+    }
+
