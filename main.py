@@ -2,6 +2,8 @@ from typing import List
 import os
 import base64
 import uuid
+from typing import Optional
+from pydantic import BaseModel
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -505,3 +507,67 @@ async def get_status(task_id: str):
         return {"status": "error", "errors": {k: v for k, v in task["results"].items() if isinstance(v, dict) and "error" in v}}
     else:
         return {"status": "pending"}
+    
+    
+    
+    
+# Новая модель для данных анкеты
+class SurveyData(BaseModel):
+    childName: str
+    childDOB: str
+    childGender: str
+    parentName: str
+    q1_1: str
+    q1_2: str
+    q1_3: str
+    q1_4: str
+    q1_5: str
+    q1_6: str
+    q1_7: str
+    q1_8: str
+    q1_9: str
+    q1_10: str
+    q2_1: str
+    q2_2: str
+    q2_3: str
+    q2_4: str
+    q2_5: str
+    q2_6: str
+    q2_7: str
+    q2_8: str
+    q2_9: str
+    q2_10: str
+    q3_1: str
+    q3_2: str
+    q3_3: str
+    q3_4: str
+    q3_5: str
+    q3_6: str
+    q3_7: str
+    q3_8: str
+    q3_9: str
+    q3_10: str
+    q4_1: str
+    q4_2: str
+    q4_3: str
+    q4_4: str
+    q4_5: str
+    q4_6: str
+    q4_7: str
+    q4_8: str
+    q4_9: str
+    q4_10: str
+    emotionalState: str
+    developmentFeatures: Optional[str] = None
+    strengths: Optional[str] = None
+    attentionAreas: Optional[str] = None
+    specialists: Optional[str] = None
+
+# Новый эндпоинт для приема анкеты
+@app.post("/submit-survey")
+async def submit_survey(survey: SurveyData):
+    # Сохранение данных (в данном случае просто вывод в терминал)
+    survey_dict = survey.dict()
+    print("Получены данные анкеты:")
+    print(survey_dict)
+    return {"message": "Анкета успешно отправлена"}
