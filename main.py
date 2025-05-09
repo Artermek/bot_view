@@ -4,6 +4,8 @@ import base64
 import uuid
 from typing import Optional
 from pydantic import BaseModel
+from openai import AsyncOpenAI
+from fastapi import HTTPException, status
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -426,6 +428,33 @@ II. Анализ деталей фигуры:
 task_store = {}
 lock = threading.Lock()
 
+
+
+async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=None):
+
+        client = AsyncOpenAI()
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user}
+        ]
+
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temp,
+                response_format=format
+            )
+
+            if response.choices:
+                return response.choices[0].message.content
+            else:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    detail='Не удалось получить ответ от модели.')
+
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f'Ошибка при запросе в OpenAI: {e}') 
 def process_image(task_id: str, image_key: str, ct: str, b64: str, prompt: str):
     """
     Отправляет одно изображение с промптом в OpenAI и сохраняет результат в task_store.
@@ -611,13 +640,48 @@ async def submit_survey(survey: SurveyData):
     # Подсчитываем баллы
     scores = calculate_survey_scores(survey_dict)
     
+    # Извлекаем текст из открытых вопросов
+    open_questions = {
+        'developmentFeatures': survey_dict.get('developmentFeatures', ''),
+        'strengths': survey_dict.get('strengths', ''),
+        'attentionAreas': survey_dict.get('attentionAreas', ''),
+        'specialists': survey_dict.get('specialists', '')
+    }
+    
+    # Формируем промпт для модели
+    system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
+    user_prompt = f"""
+    Проанализируйте следующие ответы на открытые вопросы анкеты:
+    
+    1. Особенности развития или поведения ребенка: {open_questions['developmentFeatures']}
+    2. Сильные стороны и таланты ребенка: {open_questions['strengths']}
+    3. Области, требующие особого внимания: {open_questions['attentionAreas']}
+    4. Обращение к специалистам: {open_questions['specialists']}
+    
+    Дайте краткий анализ и рекомендации на основе этих данных.
+    
+    """
+    
+    # Вызываем API модели для анализа
+    try:
+        analysis = await request(
+            system=system_prompt,
+            user=user_prompt,
+            model='gpt-4.1-mini',
+            temp=0.1
+        )
+    except Exception as e:
+        analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
+    
     # Выводим данные анкеты и баллы в терминал
     print("Получены данные анкеты:")
     print(survey_dict)
     print("Баллы по разделам:")
     print(scores)
+    print("Анализ открытых вопросов:")
+    print(analysis)
     
-    # Возвращаем ответ с баллами
+    # Возвращаем ответ с баллами и анализом
     return {
         "message": "Анкета успешно отправлена",
         "scores": {
@@ -626,6 +690,6 @@ async def submit_survey(survey: SurveyData):
             "Саморегуляция и поведение": scores['section_3'],
             "Самооценка и уверенность": scores['section_4'],
             "Общий балл": scores['total']
-        }
+        },
+        "analysis": analysis
     }
-
