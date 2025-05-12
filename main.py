@@ -86,9 +86,14 @@ class SurveyData(BaseModel):
     attentionAreas: Optional[str] = None
     specialists: Optional[str] = None
 
+class PhotoAnalysis(BaseModel):
+    image1: str
+    image2: str
+    image3: str
 class AnalysisRequest(BaseModel):
     survey: SurveyData
-    task_id: str
+    photos: PhotoAnalysis
+
 
 # Промпт для категории «Дом, Дерево, Человек»
 PROMPT_HOUSE_TREE_PERSON = """Перед тобой — скан или фотография рисунка на тему «Дом, дерево, человек». Твоя задача провести анализ в два этапа:
