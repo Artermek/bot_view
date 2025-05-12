@@ -32,6 +32,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+task_store = {}
+lock = threading.Lock()
+
+class SurveyData(BaseModel):
+    childName: str
+    childDOB: str
+    childGender: str
+    parentName: str
+    q1_1: str
+    q1_2: str
+    q1_3: str
+    q1_4: str
+    q1_5: str
+    q1_6: str
+    q1_7: str
+    q1_8: str
+    q1_9: str
+    q1_10: str
+    q2_1: str
+    q2_2: str
+    q2_3: str
+    q2_4: str
+    q2_5: str
+    q2_6: str
+    q2_7: str
+    q2_8: str
+    q2_9: str
+    q2_10: str
+    q3_1: str
+    q3_2: str
+    q3_3: str
+    q3_4: str
+    q3_5: str
+    q3_6: str
+    q3_7: str
+    q3_8: str
+    q3_9: str
+    q3_10: str
+    q4_1: str
+    q4_2: str
+    q4_3: str
+    q4_4: str
+    q4_5: str
+    q4_6: str
+    q4_7: str
+    q4_8: str
+    q4_9: str
+    q4_10: str
+    emotionalState: str
+    developmentFeatures: Optional[str] = None
+    strengths: Optional[str] = None
+    attentionAreas: Optional[str] = None
+    specialists: Optional[str] = None
+
+class AnalysisRequest(BaseModel):
+    survey: SurveyData
+    task_id: str
 
 # Промпт для категории «Дом, Дерево, Человек»
 PROMPT_HOUSE_TREE_PERSON = """Перед тобой — скан или фотография рисунка на тему «Дом, дерево, человек». Твоя задача провести анализ в два этапа:
@@ -426,9 +483,6 @@ II. Анализ деталей фигуры:
 
 """.strip()
 
-task_store = {}
-lock = threading.Lock()
-
 
 
 async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=None):
@@ -542,56 +596,6 @@ async def get_status(task_id: str):
     
     
 # Новая модель для данных анкеты
-class SurveyData(BaseModel):
-    childName: str
-    childDOB: str
-    childGender: str
-    parentName: str
-    q1_1: str
-    q1_2: str
-    q1_3: str
-    q1_4: str
-    q1_5: str
-    q1_6: str
-    q1_7: str
-    q1_8: str
-    q1_9: str
-    q1_10: str
-    q2_1: str
-    q2_2: str
-    q2_3: str
-    q2_4: str
-    q2_5: str
-    q2_6: str
-    q2_7: str
-    q2_8: str
-    q2_9: str
-    q2_10: str
-    q3_1: str
-    q3_2: str
-    q3_3: str
-    q3_4: str
-    q3_5: str
-    q3_6: str
-    q3_7: str
-    q3_8: str
-    q3_9: str
-    q3_10: str
-    q4_1: str
-    q4_2: str
-    q4_3: str
-    q4_4: str
-    q4_5: str
-    q4_6: str
-    q4_7: str
-    q4_8: str
-    q4_9: str
-    q4_10: str
-    emotionalState: str
-    developmentFeatures: Optional[str] = None
-    strengths: Optional[str] = None
-    attentionAreas: Optional[str] = None
-    specialists: Optional[str] = None
 
 # Функция подсчета баллов
 def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
@@ -693,4 +697,89 @@ async def submit_survey(survey: SurveyData):
             "Общий балл": scores['total']
         },
         "analysis": analysis
+    }
+ 
+ 
+@app.post("/analyze-survey-and-photos")
+async def analyze_survey_and_photos(data: AnalysisRequest):
+    survey_dict = data.survey.dict()
+    task_id = data.task_id
+
+    # Получаем результаты анализа фотографий из task_store
+    with lock:
+        task = task_store.get(task_id)
+    if not task or task["status"] != "done":
+        raise HTTPException(status_code=404, detail="Анализ фотографий не завершен или task_id не найден")
+
+    photo_results = task["results"]
+
+    # Подсчитываем баллы опросника
+    scores = calculate_survey_scores(survey_dict)
+
+    # Извлекаем текст из открытых вопросов
+    open_questions = {
+        'developmentFeatures': survey_dict.get('developmentFeatures', ''),
+        'strengths': survey_dict.get('strengths', ''),
+        'attentionAreas': survey_dict.get('attentionAreas', ''),
+        'specialists': survey_dict.get('specialists', '')
+    }
+
+    # Формируем промпт для GPT
+    system_prompt = """
+    Вы — опытный детский психолог, специализирующийся на анализе данных опросников и интерпретации детских рисунков. 
+    Ваша задача — проанализировать результаты опросника и анализ фотографий, чтобы дать рекомендации по развитию ребенка.
+    """
+    user_prompt = f"""
+    Проанализируйте следующие данные опросника и результаты анализа фотографий ребенка:
+
+    **Данные опросника:**
+    - Имя ребенка: {survey_dict['childName']}
+    - Дата рождения: {survey_dict['childDOB']}
+    - Пол: {survey_dict['childGender']}
+    - Имя родителя: {survey_dict['parentName']}
+    - Баллы по разделам:
+      - Эмоциональная сфера: {scores['section_1']}
+      - Социальное взаимодействие: {scores['section_2']}
+      - Саморегуляция и поведение: {scores['section_3']}
+      - Самооценка и уверенность: {scores['section_4']}
+      - Общий балл: {scores['total']}
+    - Эмоциональное состояние: {survey_dict['emotionalState']}
+    - Особенности развития: {open_questions['developmentFeatures']}
+    - Сильные стороны: {open_questions['strengths']}
+    - Области, требующие внимания: {open_questions['attentionAreas']}
+    - Обращение к специалистам: {open_questions['specialists']}
+
+    **Анализ фотографий:**
+    - Фотография 1 (Дом-Дерево-Человек): {photo_results['image1']}
+    - Фотография 2 (Животное): {photo_results['image2']}
+    - Фотография 3 (Автопортрет): {photo_results['image3']}
+
+    На основе этих данных предоставьте:
+    1. Общий анализ эмоционального состояния и развития ребенка.
+    2. Рекомендации для родителей или специалистов.
+    3. Укажите, если требуется дополнительная консультация специалистов.
+    """
+    
+    # Вызываем GPT для анализа
+    try:
+        analysis = await request(
+            system=system_prompt,
+            user=user_prompt,
+            model='gpt-4.1-2025-04-14',
+            temp=0.1
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при анализе данных: {str(e)}")
+
+    # Возвращаем ответ
+    return {
+        "message": "Анализ успешно завершен",
+        "analysis": analysis,
+        "scores": {
+            "Эмоциональная сфера": scores['section_1'],
+            "Социальное взаимодействие": scores['section_2'],
+            "Саморегуляция и поведение": scores['section_3'],
+            "Самооценка и уверенность": scores['section_4'],
+            "Общий балл": scores['total']
+        }
     }
