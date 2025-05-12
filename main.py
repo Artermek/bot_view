@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from fastapi import HTTPException, status
+from typing import Dict
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
