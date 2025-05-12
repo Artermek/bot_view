@@ -708,18 +708,13 @@ async def submit_survey(survey: SurveyData):
 @app.post("/analyze-survey-and-photos")
 async def analyze_survey_and_photos(data: AnalysisRequest):
     survey_dict = data.survey.dict()
-    task_id = data.task_id
-
-    # Получаем результаты анализа фотографий из task_store
-    with lock:
-        task = task_store.get(task_id)
-    if not task or task["status"] != "done":
-        raise HTTPException(status_code=404, detail="Анализ фотографий не завершен или task_id не найден")
-
-    photo_results = task["results"]
+    photo_results = data.photos.dict()
 
     # Подсчитываем баллы опросника
-    scores = calculate_survey_scores(survey_dict)
+    try:
+        scores = calculate_survey_scores(survey_dict)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Ошибка в данных опросника: {str(e)}")
 
     # Извлекаем текст из открытых вопросов
     open_questions = {
@@ -770,11 +765,18 @@ async def analyze_survey_and_photos(data: AnalysisRequest):
         analysis = await request(
             system=system_prompt,
             user=user_prompt,
-            model='gpt-4.1-2025-04-14',
+            model='gpt-4.1-mini',
             temp=0.1
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при анализе данных: {str(e)}")
+
+    # Выводим данные в терминал для отладки
+    print("Получены данные для анализа:")
+    print("Опросник:", survey_dict)
+    print("Фотографии:", photo_results)
+    print("Баллы:", scores)
+    print("Анализ GPT:", analysis)
 
     # Возвращаем ответ
     return {
