@@ -518,7 +518,7 @@ async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=No
 
 async def request_openai(system: str, user: str) -> str:
     client = AsyncOpenAI()
-    response = await client.chat.completions.create(
+    response = await client.chat.completions.acreate(
         model="gpt-4.1-2025-04-14",
         messages=[
             {"role": "system", "content": system},
@@ -540,7 +540,7 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
     Отправляет одно изображение с промптом в OpenAI и сохраняет результат в task_store.
     """
     try:
-        resp = await client.chat.completions.create(
+        resp = await client.chat.completions.acreate(
             model="gpt-4.1-2025-04-14" ,  
             messeges = [{'role': 'user', 'content': content}]
         )
