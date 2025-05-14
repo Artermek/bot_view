@@ -86,13 +86,15 @@ class SurveyData(BaseModel):
     attentionAreas: Optional[str] = None
     specialists: Optional[str] = None
 
-class PhotoAnalysis(BaseModel):
-    image1: str
-    image2: str
-    image3: str
+class CombinedAnalysisRequest(BaseModel):
+    photo_results: dict[str, str]  # Результаты анализа фотографий: {"image1": "...", "image2": "...", "image3": "..."}
+    survey_scores: dict[str, int]  # Баллы анкеты: {"Эмоциональная сфера": int, ...}
+    survey_analysis: str           # Анализ открытых вопросов из /submit-survey
+
+
 class AnalysisRequest(BaseModel):
     survey: SurveyData
-    photos: PhotoAnalysis
+    task_id: str
 
 
 # Промпт для категории «Дом, Дерево, Человек»
@@ -641,152 +643,92 @@ def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
     
     return scores
 
-# Обновленный эндпоинт для приема анкеты
+
+# Уже имеющееся хранилище для фото
+task_store: Dict[str, Dict] = {}
+
+# Новое хранилище для анкеты
+session_store: Dict[str, Dict] = {}
+
 @app.post("/submit-survey")
-async def submit_survey(survey: SurveyData):
-    # Преобразуем данные в словарь
-    survey_dict = survey.dict()
-    
-    # Подсчитываем баллы
-    scores = calculate_survey_scores(survey_dict)
-    
-    # Извлекаем текст из открытых вопросов
-    open_questions = {
-        'developmentFeatures': survey_dict.get('developmentFeatures', ''),
-        'strengths': survey_dict.get('strengths', ''),
-        'attentionAreas': survey_dict.get('attentionAreas', ''),
-        'specialists': survey_dict.get('specialists', '')
-    }
-    
-    # Формируем промпт для модели
-    system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
-    user_prompt = f"""
-    Проанализируйте следующие ответы на открытые вопросы анкеты:
-    
-    1. Особенности развития или поведения ребенка: {open_questions['developmentFeatures']}
-    2. Сильные стороны и таланты ребенка: {open_questions['strengths']}
-    3. Области, требующие особого внимания: {open_questions['attentionAreas']}
-    4. Обращение к специалистам: {open_questions['specialists']}
-    
-    Дайте краткий анализ и рекомендации на основе этих данных.
-    
+async def submit_survey(survey: SurveyData, task_id: str):
     """
-    
-    # Вызываем API модели для анализа
-    try:
-        analysis = await request(
-            system=system_prompt,
-            user=user_prompt,
-            model='gpt-4.1-mini',
-            temp=0.1
-        )
-    except Exception as e:
-        analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
-    
-    # Выводим данные анкеты и баллы в терминал
-    print("Получены данные анкеты:")
-    print(survey_dict)
-    print("Баллы по разделам:")
-    print(scores)
-    print("Анализ открытых вопросов:")
-    print(analysis)
-    
-    # Возвращаем ответ с баллами и анализом
+    Принимает данные анкеты и тот же task_id, что пришёл на /upload.
+    Считает баллы и анализ открытых вопросов и сохраняет их в session_store.
+    """
+    # 1) Подсчёт баллов
+    scores = calculate_survey_scores(survey.dict())
+
+    # 2) Анализ открытых вопросов
+    system_prompt = "Вы — опытный психолог, анализирующий открытые ответы анкеты."
+    user_prompt = (
+        f"Особенности: {survey.developmentFeatures}\n"
+        f"Сильные: {survey.strengths}\n"
+        f"Внимание: {survey.attentionAreas}\n"
+        f"Специалисты: {survey.specialists}"
+    )
+    analysis = await request(system_prompt, user_prompt)
+
+    # 3) Сохраняем в session_store
+    session_store[task_id] = {
+        "scores": scores,
+        "survey_analysis": analysis
+    }
+
     return {
-        "message": "Анкета успешно отправлена",
-        "scores": {
-            "Эмоциональная сфера": scores['section_1'],
-            "Социальное взаимодействие": scores['section_2'],
-            "Саморегуляция и поведение": scores['section_3'],
-            "Самооценка и уверенность": scores['section_4'],
-            "Общий балл": scores['total']
-        },
+        "task_id": task_id,
+        "scores": scores,
         "analysis": analysis
     }
- 
- 
+
 @app.post("/analyze-survey-and-photos")
 async def analyze_survey_and_photos(data: AnalysisRequest):
-    survey_dict = data.survey.dict()
-    photo_results = data.photos.dict()
-
-    # Подсчитываем баллы опросника
-    try:
-        scores = calculate_survey_scores(survey_dict)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=f"Ошибка в данных опросника: {str(e)}")
-
-    # Извлекаем текст из открытых вопросов
-    open_questions = {
-        'developmentFeatures': survey_dict.get('developmentFeatures', ''),
-        'strengths': survey_dict.get('strengths', ''),
-        'attentionAreas': survey_dict.get('attentionAreas', ''),
-        'specialists': survey_dict.get('specialists', '')
-    }
-
-    # Формируем промпт для GPT
-    system_prompt = """
-    Вы — опытный детский психолог, специализирующийся на анализе данных опросников и интерпретации детских рисунков. 
-    Ваша задача — проанализировать результаты опросника и анализ фотографий, чтобы дать рекомендации по развитию ребенка.
     """
+    Достаём промежуточные результаты по task_id из session_store и task_store,
+    формируем единый запрос к модели и возвращаем комбинированный анализ.
+    """
+    task_id = data.task_id
+
+    # 1) Результаты фото
+    photo_task = task_store.get(task_id)
+    if not photo_task or photo_task["status"] != "done":
+        raise HTTPException(404, "Фото ещё не проанализированы")
+    photo_results = photo_task["results"]
+
+    # 2) Результаты анкеты
+    survey_session = session_store.get(task_id)
+    if not survey_session:
+        raise HTTPException(404, "Анкета ещё не проанализирована")
+    scores = survey_session["scores"]
+    survey_analysis = survey_session["survey_analysis"]
+
+    # 3) Формируем единый промпт
+    system_prompt = (
+        "Вы — опытный детский психолог. "
+        "Объедините результаты проективного теста и анкеты и дайте рекомендации."
+    )
     user_prompt = f"""
-    Проанализируйте следующие данные опросника и результаты анализа фотографий ребенка:
+Баллы анкеты:
+  Эмоциональная: {scores['section_1']}
+  Социальное: {scores['section_2']}
+  Саморегуляция: {scores['section_3']}
+  Самооценка: {scores['section_4']}
+  Общий: {scores['total']}
 
-    **Данные опросника:**
-    - Имя ребенка: {survey_dict['childName']}
-    - Дата рождения: {survey_dict['childDOB']}
-    - Пол: {survey_dict['childGender']}
-    - Имя родителя: {survey_dict['parentName']}
-    - Баллы по разделам:
-      - Эмоциональная сфера: {scores['section_1']}
-      - Социальное взаимодействие: {scores['section_2']}
-      - Саморегуляция и поведение: {scores['section_3']}
-      - Самооценка и уверенность: {scores['section_4']}
-      - Общий балл: {scores['total']}
-    - Эмоциональное состояние: {survey_dict['emotionalState']}
-    - Особенности развития: {open_questions['developmentFeatures']}
-    - Сильные стороны: {open_questions['strengths']}
-    - Области, требующие внимания: {open_questions['attentionAreas']}
-    - Обращение к специалистам: {open_questions['specialists']}
+Анализ открытых вопросов:
+{survey_analysis}
 
-    **Анализ фотографий:**
-    - Фотография 1 (Дом-Дерево-Человек): {photo_results['image1']}
-    - Фотография 2 (Животное): {photo_results['image2']}
-    - Фотография 3 (Автопортрет): {photo_results['image3']}
+Анализ рисунков:
+  Дом/Дерево/Человек: {photo_results['image1']}
+  Животное: {photo_results['image2']}
+  Автопортрет: {photo_results['image3']}
 
-    На основе этих данных предоставьте:
-    1. Общий анализ эмоционального состояния и развития ребенка.
-    2. Рекомендации для родителей или специалистов.
-    3. Укажите, если требуется дополнительная консультация специалистов.
-    """
-    
-    # Вызываем GPT для анализа
-    try:
-        analysis = await request(
-            system=system_prompt,
-            user=user_prompt,
-            model='gpt-4.1-mini',
-            temp=0.1
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при анализе данных: {str(e)}")
+Дайте общий анализ и рекомендации.
+"""
 
-    # Выводим данные в терминал для отладки
-    print("Получены данные для анализа:")
-    print("Опросник:", survey_dict)
-    print("Фотографии:", photo_results)
-    print("Баллы:", scores)
-    print("Анализ GPT:", analysis)
+    # 4) Шлём в OpenAI
+    combined = await request(system_prompt, user_prompt)
 
-    # Возвращаем ответ
     return {
-        "message": "Анализ успешно завершен",
-        "analysis": analysis,
-        "scores": {
-            "Эмоциональная сфера": scores['section_1'],
-            "Социальное взаимодействие": scores['section_2'],
-            "Саморегуляция и поведение": scores['section_3'],
-            "Самооценка и уверенность": scores['section_4'],
-            "Общий балл": scores['total']
-        }
+        "combined_analysis": combined
     }
