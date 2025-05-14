@@ -518,7 +518,7 @@ async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=No
 
 async def request_openai(system: str, user: str) -> str:
     client = AsyncOpenAI()
-    response = await client.chat.completions.acreate(
+    response = await client.chat.completions.create(  # Исправлено acreate -> create
         model="gpt-4.1-2025-04-14",
         messages=[
             {"role": "system", "content": system},
@@ -533,22 +533,19 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
     content = [
         {"type": "text",      "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-    ]    
+    ]
     
-    
-    """
-    Отправляет одно изображение с промптом в OpenAI и сохраняет результат в task_store.
-    """
     try:
-        resp = await client.chat.completions.acreate(
-            model="gpt-4.1-2025-04-14" ,  
-            messeges = [{'role': 'user', 'content': content}]
+        resp = await client.chat.completions.create(  # Исправлено acreate -> create
+            model="gpt-4.1-2025-04-14",
+            messages=[{'role': 'user', 'content': content}]  # Исправлено messeges -> messages
         )
         
         result = resp.choices[0].message.content
         with lock:
             task_store[task_id]["results"][key] = result
-            if all(task_store[task_id]['results'].values()):
+            # Проверяем, что все результаты — строки, а не словари с ошибками
+            if all(isinstance(v, str) for v in task_store[task_id]['results'].values()):
                 task_store[task_id]['status'] = 'done'
     except Exception as e:
         with lock:
