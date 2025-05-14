@@ -519,7 +519,7 @@ async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=No
 async def request_openai(system: str, user: str) -> str:
     client = AsyncOpenAI()
     response = await client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4.1-2025-04-14",
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": user}
