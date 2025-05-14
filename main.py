@@ -86,11 +86,6 @@ class SurveyData(BaseModel):
     attentionAreas: Optional[str] = None
     specialists: Optional[str] = None
 
-class CombinedAnalysisRequest(BaseModel):
-    photo_results: dict[str, str]  # Результаты анализа фотографий: {"image1": "...", "image2": "...", "image3": "..."}
-    survey_scores: dict[str, int]  # Баллы анкеты: {"Эмоциональная сфера": int, ...}
-    survey_analysis: str           # Анализ открытых вопросов из /submit-survey
-
 
 class AnalysisRequest(BaseModel):
     survey: SurveyData
