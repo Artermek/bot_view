@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from openai import AsyncOpenAI
 from fastapi import HTTPException, status
 from typing import Dict
+from openai import AsyncOpenAI
+import asyncio
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -512,74 +514,74 @@ async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=No
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 detail=f'Ошибка при запросе в OpenAI: {e}') 
-def process_image(task_id: str, image_key: str, ct: str, b64: str, prompt: str):
+
+
+async def request_openai(system: str, user: str) -> str:
+    client = AsyncOpenAI()
+    response = await client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user}
+        ],
+        temperature=0.1
+    )
+    return response.choices[0].message.content
+
+async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str):
+    client = AsyncOpenAI()
+    content = [
+        {"type": "text",      "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+    ]    
+    
+    
     """
     Отправляет одно изображение с промптом в OpenAI и сохраняет результат в task_store.
     """
     try:
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        content = [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}}
-        ]
-        resp = client.chat.completions.create(
-            model="gpt-4.1-2025-04-14",  # Используйте актуальную модель
-            messages=[{"role": "user", "content": content}],
+        resp = await client.chat.completions.create(
+            model="gpt-4.1-2025-04-14" ,  
+            messeges = [{'role': 'user', 'content': content}]
         )
+        
         result = resp.choices[0].message.content
         with lock:
-            task_store[task_id]["results"][image_key] = result
-            # Проверяем, все ли результаты получены
-            if all(task_store[task_id]["results"].values()):
-                task_store[task_id]["status"] = "done"
+            task_store[task_id]["results"][key] = result
+            if all(task_store[task_id]['results'].values()):
+                task_store[task_id]['status'] = 'done'
     except Exception as e:
         with lock:
-            task_store[task_id]["results"][image_key] = {"error": str(e)}
-            task_store[task_id]["status"] = "error"
+            task_store[task_id]['results'][key] = {'error': str(e)}
+            task_store[task_id]['status'] = 'error'
+   
 
 @app.post("/upload")
-async def upload_images(
-    background_tasks: BackgroundTasks,
-    files: List[UploadFile] = File(...)
-):
+async def upload_images(files: List[UploadFile] = File(...)):
     if len(files) != 3:
-        raise HTTPException(400, f"Ожидалось 3 файла, пришло {len(files)}")
+        raise HTTPException(status_code=400, detail="Нужно 3 файла")
 
     encoded = []
-    for idx, file in enumerate(files, start=1):
-        if not file.content_type.startswith("image/"):
-            raise HTTPException(400, f"file#{idx} не изображение: {file.content_type}")
-        data = await file.read()
-        b64 = base64.b64encode(data).decode("utf-8")
-        encoded.append((file.content_type, b64))
+    for f in files:
+        if not f.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="Только изображения")
+        data = await f.read()
+        b64 = base64.b64encode(data).decode()
+        encoded.append((f.content_type, b64))
 
     task_id = uuid.uuid4().hex
     with lock:
         task_store[task_id] = {
-            "status": "pending",
-            "results": {
-                "image1": None,
-                "image2": None,
-                "image3": None
-            }
+            'status': 'pending',
+            'results': {'image1': None, 'image2': None, 'image3': None}
         }
 
-    prompts = [
-        PROMPT_HOUSE_TREE_PERSON,
-        PROMPT_ANIMAL,
-        PROMPT_SELF_PORTRAIT
-    ]
+    prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]
+    for idx, (mime, b64) in enumerate(encoded, start=1):
+        key = f'image{idx}'
+        asyncio.create_task(process_image(task_id, key, mime, b64, prompts[idx-1]))
 
-    # Запускаем обработку каждого изображения в отдельной фоновой задаче
-    for i, (ct, b64) in enumerate(encoded):
-        image_key = f"image{i+1}"
-        prompt = prompts[i]
-        background_tasks.add_task(process_image, task_id, image_key, ct, b64, prompt)
-
-    return JSONResponse(
-        status_code=202,
-        content={"task_id": task_id}
-    )
+    return JSONResponse(status_code=202, content={'task_id': task_id})
 
 @app.get("/status/{task_id}")
 async def get_status(task_id: str):
