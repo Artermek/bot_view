@@ -536,9 +536,9 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
     ]
     
     try:
-        resp = await client.chat.completions.create(  # Исправлено acreate -> create
+        resp = await client.chat.completions.create(  
             model="gpt-4.1-2025-04-14",
-            messages=[{'role': 'user', 'content': content}]  # Исправлено messeges -> messages
+            messages=[{'role': 'user', 'content': content}]  
         )
         
         result = resp.choices[0].message.content
@@ -644,36 +644,69 @@ task_store: Dict[str, Dict] = {}
 # Новое хранилище для анкеты
 session_store: Dict[str, Dict] = {}
 
+# Обновленный эндпоинт для приема анкеты
 @app.post("/submit-survey")
-async def submit_survey(survey: SurveyData, task_id: str):
-    """
-    Принимает данные анкеты и тот же task_id, что пришёл на /upload.
-    Считает баллы и анализ открытых вопросов и сохраняет их в session_store.
-    """
-    # 1) Подсчёт баллов
-    scores = calculate_survey_scores(survey.dict())
-
-    # 2) Анализ открытых вопросов
-    system_prompt = "Вы — опытный психолог, анализирующий открытые ответы анкеты."
-    user_prompt = (
-        f"Особенности: {survey.developmentFeatures}\n"
-        f"Сильные: {survey.strengths}\n"
-        f"Внимание: {survey.attentionAreas}\n"
-        f"Специалисты: {survey.specialists}"
-    )
-    analysis = await request(system_prompt, user_prompt)
-
-    # 3) Сохраняем в session_store
-    session_store[task_id] = {
-        "scores": scores,
-        "survey_analysis": analysis
+async def submit_survey(survey: SurveyData):
+    # Преобразуем данные в словарь
+    survey_dict = survey.dict()
+    
+    # Подсчитываем баллы
+    scores = calculate_survey_scores(survey_dict)
+    
+    # Извлекаем текст из открытых вопросов
+    open_questions = {
+        'developmentFeatures': survey_dict.get('developmentFeatures', ''),
+        'strengths': survey_dict.get('strengths', ''),
+        'attentionAreas': survey_dict.get('attentionAreas', ''),
+        'specialists': survey_dict.get('specialists', '')
     }
-
+    
+    # Формируем промпт для модели
+    system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
+    user_prompt = f"""
+    Проанализируйте следующие ответы на открытые вопросы анкеты:
+    
+    1. Особенности развития или поведения ребенка: {open_questions['developmentFeatures']}
+    2. Сильные стороны и таланты ребенка: {open_questions['strengths']}
+    3. Области, требующие особого внимания: {open_questions['attentionAreas']}
+    4. Обращение к специалистам: {open_questions['specialists']}
+    
+    Дайте краткий анализ и рекомендации на основе этих данных.
+    
+    """
+    
+    # Вызываем API модели для анализа
+    try:
+        analysis = await request(
+            system=system_prompt,
+            user=user_prompt,
+            model='gpt-4.1-mini',
+            temp=0.1
+        )
+    except Exception as e:
+        analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
+    
+    # Выводим данные анкеты и баллы в терминал
+    print("Получены данные анкеты:")
+    print(survey_dict)
+    print("Баллы по разделам:")
+    print(scores)
+    print("Анализ открытых вопросов:")
+    print(analysis)
+    
+    # Возвращаем ответ с баллами и анализом
     return {
-        "task_id": task_id,
-        "scores": scores,
+        "message": "Анкета успешно отправлена",
+        "scores": {
+            "Эмоциональная сфера": scores['section_1'],
+            "Социальное взаимодействие": scores['section_2'],
+            "Саморегуляция и поведение": scores['section_3'],
+            "Самооценка и уверенность": scores['section_4'],
+            "Общий балл": scores['total']
+        },
         "analysis": analysis
     }
+
 
 @app.post("/analyze-survey-and-photos")
 async def analyze_survey_and_photos(data: AnalysisRequest):
