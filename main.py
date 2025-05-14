@@ -1,40 +1,27 @@
-from typing import List
-import os
+from typing import List, Dict
 import base64
 import uuid
-from typing import Optional
 from pydantic import BaseModel
-from openai import AsyncOpenAI
-from fastapi import HTTPException, status
-from typing import Dict
-from openai import AsyncOpenAI
-import asyncio
-
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
+from openai import AsyncOpenAI
+import asyncio
 import threading
 
-# Если хотите хранить OPENAI_API_KEY в .env локально:
-from dotenv import load_dotenv
 app = FastAPI()
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://siriusfuture.ru",
-        "https://www.siriusfuture.ru",
-        "https://*.tilda.ws",
-        "https://tilda.cc",
-        "https://static.tildacdn.com",
-    ],
+    allow_origins=["https://siriusfuture.ru", "https://www.siriusfuture.ru", "https://*.tilda.ws", "https://tilda.cc", "https://static.tildacdn.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-task_store = {}
+
+task_store: Dict[str, Dict] = {}
+session_store: Dict[str, Dict] = {}
 lock = threading.Lock()
 
 class SurveyData(BaseModel):
@@ -83,11 +70,10 @@ class SurveyData(BaseModel):
     q4_9: str
     q4_10: str
     emotionalState: str
-    developmentFeatures: Optional[str] = None
-    strengths: Optional[str] = None
-    attentionAreas: Optional[str] = None
-    specialists: Optional[str] = None
-
+    developmentFeatures: str | None = None
+    strengths: str | None = None
+    attentionAreas: str | None = None
+    specialists: str | None = None
 
 class AnalysisRequest(BaseModel):
     survey: SurveyData
@@ -488,76 +474,34 @@ II. Анализ деталей фигуры:
 """.strip()
 
 
-
-async def request(system, user, model='gpt-4.1-mini', temp=None, format: dict=None):
-
-        client = AsyncOpenAI()
-        messages = [
-            {'role': 'system', 'content': system},
-            {'role': 'user', 'content': user}
-        ]
-
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temp,
-                response_format=format
-            )
-
-            if response.choices:
-                return response.choices[0].message.content
-            else:
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                    detail='Не удалось получить ответ от модели.')
-
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f'Ошибка при запросе в OpenAI: {e}') 
-
-
-async def request_openai(system: str, user: str) -> str:
+async def request(system, user, model='gpt-4.1-mini', temp=None):
     client = AsyncOpenAI()
-    response = await client.chat.completions.create(  # Исправлено acreate -> create
-        model="gpt-4.1-2025-04-14",
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user}
-        ],
-        temperature=0.1
-    )
-    return response.choices[0].message.content
+    messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+    try:
+        response = await client.chat.completions.create(model=model, messages=messages, temperature=temp)
+        return response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f'Ошибка при запросе в OpenAI: {e}')
 
 async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str):
     client = AsyncOpenAI()
-    content = [
-        {"type": "text",      "text": prompt},
-        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-    ]
-    
+    content = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]
     try:
-        resp = await client.chat.completions.create(  
-            model="gpt-4.1-2025-04-14",
-            messages=[{'role': 'user', 'content': content}]  
-        )
-        
+        resp = await client.chat.completions.create(model="gpt-4.1-2025-04-14", messages=[{'role': 'user', 'content': content}])
         result = resp.choices[0].message.content
         with lock:
             task_store[task_id]["results"][key] = result
-            # Проверяем, что все результаты — строки, а не словари с ошибками
             if all(isinstance(v, str) for v in task_store[task_id]['results'].values()):
                 task_store[task_id]['status'] = 'done'
     except Exception as e:
         with lock:
             task_store[task_id]['results'][key] = {'error': str(e)}
             task_store[task_id]['status'] = 'error'
-   
 
 @app.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
     if len(files) != 3:
         raise HTTPException(status_code=400, detail="Нужно 3 файла")
-
     encoded = []
     for f in files:
         if not f.content_type.startswith('image/'):
@@ -565,19 +509,13 @@ async def upload_images(files: List[UploadFile] = File(...)):
         data = await f.read()
         b64 = base64.b64encode(data).decode()
         encoded.append((f.content_type, b64))
-
     task_id = uuid.uuid4().hex
     with lock:
-        task_store[task_id] = {
-            'status': 'pending',
-            'results': {'image1': None, 'image2': None, 'image3': None}
-        }
-
-    prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]
+        task_store[task_id] = {'status': 'pending', 'results': {'image1': None, 'image2': None, 'image3': None}}
+    prompts = ["PROMPT_HOUSE_TREE_PERSON", "PROMPT_ANIMAL", "PROMPT_SELF_PORTRAIT"]  # Замените на реальные промпты
     for idx, (mime, b64) in enumerate(encoded, start=1):
         key = f'image{idx}'
         asyncio.create_task(process_image(task_id, key, mime, b64, prompts[idx-1]))
-
     return JSONResponse(status_code=202, content={'task_id': task_id})
 
 @app.get("/status/{task_id}")
@@ -592,170 +530,67 @@ async def get_status(task_id: str):
         return {"status": "error", "errors": {k: v for k, v in task["results"].items() if isinstance(v, dict) and "error" in v}}
     else:
         return {"status": "pending"}
-    
-    
-    
-    
-# Новая модель для данных анкеты
 
-# Функция подсчета баллов
 def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
-    """
-    Подсчитывает баллы по каждому разделу анкеты, суммируя значения вопросов.
-    
-    Args:
-        survey_data (Dict[str, str]): Данные анкеты, где значения вопросов представлены строками ("1"–"5").
-    
-    Returns:
-        Dict[str, int]: Словарь с суммами баллов по разделам: {'section_1': int, 'section_2': int, 
-                        'section_3': int, 'section_4': int, 'total': int}.
-    """
-    # Список вопросов по разделам
     sections = {
         'section_1': [f'q1_{i}' for i in range(1, 11)],
         'section_2': [f'q2_{i}' for i in range(1, 11)],
         'section_3': [f'q3_{i}' for i in range(1, 11)],
         'section_4': [f'q4_{i}' for i in range(1, 11)]
     }
-    
-    # Инициализация словаря для хранения баллов
-    scores = {
-        'section_1': 0,
-        'section_2': 0,
-        'section_3': 0,
-        'section_4': 0
-    }
-    
-    # Подсчет баллов по каждому разделу
+    scores = {'section_1': 0, 'section_2': 0, 'section_3': 0, 'section_4': 0}
     for section, questions in sections.items():
         for question in questions:
-            score = int(survey_data[question])  # Преобразуем строковое значение в число
-            scores[section] += score
-    
-    # Общий балл
+            scores[section] += int(survey_data[question])
     scores['total'] = sum(scores[section] for section in sections.keys())
-    
     return scores
 
-
-# Уже имеющееся хранилище для фото
-task_store: Dict[str, Dict] = {}
-
-# Новое хранилище для анкеты
-session_store: Dict[str, Dict] = {}
-
-# Обновленный эндпоинт для приема анкеты
 @app.post("/submit-survey")
-async def submit_survey(survey: SurveyData):
-    # Преобразуем данные в словарь
+async def submit_survey(request: AnalysisRequest):
+    survey = request.survey
+    task_id = request.task_id
+    if task_id not in task_store:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
     survey_dict = survey.dict()
-    
-    # Подсчитываем баллы
     scores = calculate_survey_scores(survey_dict)
-    
-    # Извлекаем текст из открытых вопросов
     open_questions = {
         'developmentFeatures': survey_dict.get('developmentFeatures', ''),
         'strengths': survey_dict.get('strengths', ''),
         'attentionAreas': survey_dict.get('attentionAreas', ''),
         'specialists': survey_dict.get('specialists', '')
     }
-    
-    # Формируем промпт для модели
     system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
     user_prompt = f"""
     Проанализируйте следующие ответы на открытые вопросы анкеты:
-    
     1. Особенности развития или поведения ребенка: {open_questions['developmentFeatures']}
     2. Сильные стороны и таланты ребенка: {open_questions['strengths']}
     3. Области, требующие особого внимания: {open_questions['attentionAreas']}
     4. Обращение к специалистам: {open_questions['specialists']}
-    
     Дайте краткий анализ и рекомендации на основе этих данных.
-    
     """
-    
-    # Вызываем API модели для анализа
     try:
-        analysis = await request(
-            system=system_prompt,
-            user=user_prompt,
-            model='gpt-4.1-mini',
-            temp=0.1
-        )
+        analysis = await request(system=system_prompt, user=user_prompt, model='gpt-4.1-mini', temp=0.1)
     except Exception as e:
         analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
     
-    # Выводим данные анкеты и баллы в терминал
-    print("Получены данные анкеты:")
-    print(survey_dict)
-    print("Баллы по разделам:")
-    print(scores)
-    print("Анализ открытых вопросов:")
-    print(analysis)
-    
-    # Возвращаем ответ с баллами и анализом
-    return {
-        "message": "Анкета успешно отправлена",
-        "scores": {
-            "Эмоциональная сфера": scores['section_1'],
-            "Социальное взаимодействие": scores['section_2'],
-            "Саморегуляция и поведение": scores['section_3'],
-            "Самооценка и уверенность": scores['section_4'],
-            "Общий балл": scores['total']
-        },
-        "analysis": analysis
-    }
+    session_store[task_id] = {"scores": scores, "analysis": analysis}
+    return {"message": "Анкета успешно отправлена", "task_id": task_id}
 
-
-@app.post("/analyze-survey-and-photos")
-async def analyze_survey_and_photos(data: AnalysisRequest):
-    """
-    Достаём промежуточные результаты по task_id из session_store и task_store,
-    формируем единый запрос к модели и возвращаем комбинированный анализ.
-    """
-    task_id = data.task_id
-
-    # 1) Результаты фото
-    photo_task = task_store.get(task_id)
-    if not photo_task or photo_task["status"] != "done":
-        raise HTTPException(404, "Фото ещё не проанализированы")
-    photo_results = photo_task["results"]
-
-    # 2) Результаты анкеты
-    survey_session = session_store.get(task_id)
-    if not survey_session:
-        raise HTTPException(404, "Анкета ещё не проанализирована")
-    scores = survey_session["scores"]
-    survey_analysis = survey_session["survey_analysis"]
-
-    # 3) Формируем единый промпт
-    system_prompt = (
-        "Вы — опытный детский психолог. "
-        "Объедините результаты проективного теста и анкеты и дайте рекомендации."
-    )
-    user_prompt = f"""
-Баллы анкеты:
-  Эмоциональная: {scores['section_1']}
-  Социальное: {scores['section_2']}
-  Саморегуляция: {scores['section_3']}
-  Самооценка: {scores['section_4']}
-  Общий: {scores['total']}
-
-Анализ открытых вопросов:
-{survey_analysis}
-
-Анализ рисунков:
-  Дом/Дерево/Человек: {photo_results['image1']}
-  Животное: {photo_results['image2']}
-  Автопортрет: {photo_results['image3']}
-
-Дайте общий анализ и рекомендации.
-"""
-
-    # 4) Шлём в OpenAI
-    combined = await request(system_prompt, user_prompt)
-
-    return {
-        "combined_analysis": combined
-    }
+@app.get("/report/{task_id}")
+async def get_report(task_id: str):
+    with lock:
+        task = task_store.get(task_id)
+    survey_data = session_store.get(task_id)
+    if not task or not survey_data:
+        raise HTTPException(status_code=404, detail="Task or survey data not found")
+    if task["status"] == "done":
+        return {
+            "message": "Полный отчет готов",
+            "survey_results": survey_data,
+            "photo_analysis": task["results"]
+        }
+    elif task["status"] == "error":
+        return {"status": "error", "errors": task["results"]}
+    else:
+        return {"status": "pending"}
