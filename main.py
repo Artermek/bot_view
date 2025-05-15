@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 import asyncio
 import threading
+from typing import Optional
 
 app = FastAPI()
 
@@ -70,10 +71,11 @@ class SurveyData(BaseModel):
     q4_9: str
     q4_10: str
     emotionalState: str
-    developmentFeatures: str | None = None
-    strengths: str | None = None
-    attentionAreas: str | None = None
-    specialists: str | None = None
+    developmentFeatures: Optional[str] = None
+    strengths: Optional[str] = None
+    attentionAreas: Optional[str] = None
+    specialists: Optional[str] = None
+
 
 class AnalysisRequest(BaseModel):
     survey: SurveyData
