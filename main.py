@@ -524,7 +524,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
     task_id = uuid.uuid4().hex
     with lock:
         task_store[task_id] = {'status': 'pending', 'results': {'image1': None, 'image2': None, 'image3': None}}
-    prompts = ["PROMPT_HOUSE_TREE_PERSON", "PROMPT_ANIMAL", "PROMPT_SELF_PORTRAIT"]  # Замените на реальные промпты
+    prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]  
     for idx, (mime, b64) in enumerate(encoded, start=1):
         key = f'image{idx}'
         asyncio.create_task(process_image(task_id, key, mime, b64, prompts[idx-1]))
@@ -560,20 +560,33 @@ def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
     return scores
 
 @app.post("/submit-survey")
-async def submit_survey(request: AnalysisRequest):
-    survey = request.survey
-    task_id = request.task_id
-    if task_id not in task_store:
-        raise HTTPException(status_code=404, detail="Task not found")
+async def submit_survey(survey_request: AnalysisRequest):
+    survey = survey_request.survey
+    task_id = survey_request.task_id
     
+    # Проверка наличия task_id
+    with lock:
+        if task_id not in task_store:
+            raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Преобразуем survey в словарь
     survey_dict = survey.dict()
-    scores = calculate_survey_scores(survey_dict)
+    
+    # Рассчитываем баллы
+    try:
+        scores = calculate_survey_scores(survey_dict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка при расчете баллов: {str(e)}")
+    
+    # Собираем открытые вопросы
     open_questions = {
-        'developmentFeatures': survey_dict.get('developmentFeatures', ''),
-        'strengths': survey_dict.get('strengths', ''),
-        'attentionAreas': survey_dict.get('attentionAreas', ''),
-        'specialists': survey_dict.get('specialists', '')
+        'developmentFeatures': survey_dict.get('developmentFeatures', '') or '',
+        'strengths': survey_dict.get('strengths', '') or '',
+        'attentionAreas': survey_dict.get('attentionAreas', '') or '',
+        'specialists': survey_dict.get('specialists', '') or ''
     }
+    
+    # Промпты для анализа открытых вопросов
     system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
     user_prompt = f"""
     Проанализируйте следующие ответы на открытые вопросы анкеты:
@@ -583,12 +596,17 @@ async def submit_survey(request: AnalysisRequest):
     4. Обращение к специалистам: {open_questions['specialists']}
     Дайте краткий анализ и рекомендации на основе этих данных.
     """
+    
+    # Вызов OpenAI API
     try:
         analysis = await request(system=system_prompt, user=user_prompt, model='gpt-4.1-mini', temp=0.1)
     except Exception as e:
         analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
     
-    session_store[task_id] = {"scores": scores, "analysis": analysis}
+    # Сохранение результатов в session_store
+    with lock:
+        session_store[task_id] = {"scores": scores, "analysis": analysis}
+    
     return {"message": "Анкета успешно отправлена", "task_id": task_id}
 
 @app.get("/report/{task_id}")
