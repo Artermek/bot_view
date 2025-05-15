@@ -486,21 +486,30 @@ async def request(system, user, model='gpt-4.1-mini', temp=None):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f'Ошибка при запросе в OpenAI: {e}')
 
+
 async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str):
     client = AsyncOpenAI()
-    content = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]
+    content = [
+        {"type": "text",      "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+    ]
+    
     try:
-        resp = await client.chat.completions.create(model="gpt-4.1-2025-04-14", messages=[{'role': 'user', 'content': content}])
+        resp = await client.chat.completions.create(  
+            model="gpt-4.1-2025-04-14",
+            messages=[{'role': 'user', 'content': content}]  
+        )
+        
         result = resp.choices[0].message.content
         with lock:
             task_store[task_id]["results"][key] = result
+            # Проверяем, что все результаты — строки, а не словари с ошибками
             if all(isinstance(v, str) for v in task_store[task_id]['results'].values()):
                 task_store[task_id]['status'] = 'done'
     except Exception as e:
         with lock:
             task_store[task_id]['results'][key] = {'error': str(e)}
             task_store[task_id]['status'] = 'error'
-
 @app.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
     if len(files) != 3:
