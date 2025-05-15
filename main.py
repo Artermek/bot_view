@@ -528,6 +528,7 @@ async def get_status(task_id: str):
     if task is None:
         return {"status": "pending"}
     if task["status"] == "done":
+        print(task["results"])
         return {"status": "done", "results": task["results"]}
     elif task["status"] == "error":
         return {"status": "error", "errors": {k: v for k, v in task["results"].items() if isinstance(v, dict) and "error" in v}}
@@ -535,6 +536,7 @@ async def get_status(task_id: str):
         return {"status": "pending"}
 
 def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
+
     sections = {
         'section_1': [f'q1_{i}' for i in range(1, 11)],
         'section_2': [f'q2_{i}' for i in range(1, 11)],
