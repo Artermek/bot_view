@@ -806,7 +806,7 @@ async def get_report(task_id: str):
             final_analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
         return { 
             "message": final_analysis,
-            "survey_results": final_analysis,
+            "survey_results": " ",
             "photo_analysis": " "
         }
     elif task["status"] == "error":
