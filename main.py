@@ -707,7 +707,7 @@ async def get_report(task_id: str):
 *Отчёт составлен на основе проектных методик и наблюдений. Является ориентиром для мягкой поддержки ребёнка в развитии.*
         
         '''
-        final_user = f'''    
+        final_user = '''    
 Твоя задача как опытного психолога, проанализировать результаты анализа фотографий и психологического отчёта о ребёнке.
         
         
@@ -801,10 +801,15 @@ async def get_report(task_id: str):
         '''
         
         try:
-            final_analysis = await request(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
-            return final_analysis
+           final_analysis = await request(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
+           print (final_analysis)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
+            final_analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
+        return { 
+            "message": final_analysis,
+            "survey_results": f"{final_analysis} ",
+            "photo_analysis": " "
+        }
     elif task["status"] == "error":
         return {"status": "error", "errors": task["results"]}
     else:
