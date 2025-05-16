@@ -803,12 +803,13 @@ async def get_report(task_id: str):
        
         try:
             final_analysis = await request(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
-            
+            print('--------------------------------------------')
+            print(final_analysis)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
         return { 
             "message": final_analysis,
-            "survey_results": " ",
+            "survey_results": f"{final_analysis}",
             "photo_analysis": " "
         }
     elif task["status"] == "error":
