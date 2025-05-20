@@ -1,18 +1,16 @@
-from typing import List, Dict
-import base64
-import uuid
-from pydantic import BaseModel
-from fastapi import FastAPI, UploadFile, File, HTTPException, status
+import asyncio
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict, List, Optional
+import uuid
+import base64
 from openai import AsyncOpenAI
-import asyncio
-import threading
-from typing import Optional
 
 app = FastAPI()
 
-# CORS
+# CORS settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://siriusfuture.ru", "https://www.siriusfuture.ru", "https://*.tilda.ws", "https://tilda.cc", "https://static.tildacdn.com"],
@@ -22,9 +20,7 @@ app.add_middleware(
 )
 
 task_store: Dict[str, Dict] = {}
-session_store: Dict[str, Dict] = {}
-lock = threading.Lock()
-
+lock = asyncio.Lock()
 class SurveyData(BaseModel):
     childName: str
     childDOB: str
@@ -75,7 +71,6 @@ class SurveyData(BaseModel):
     strengths: Optional[str] = None
     attentionAreas: Optional[str] = None
     specialists: Optional[str] = None
-
 
 class AnalysisRequest(BaseModel):
     survey: SurveyData
@@ -477,75 +472,70 @@ II. Анализ деталей фигуры:
 """.strip()
 
 
-async def request(system, user, model='gpt-4.1-2025-04-14', temp=None):
+async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
     client = AsyncOpenAI()
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
     try:
         response = await client.chat.completions.create(model=model, messages=messages, temperature=temp)
         return response.choices[0].message.content
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f'Ошибка при запросе в OpenAI: {e}')
-
+        raise HTTPException(status_code=500, detail=f'Ошибка при запросе в OpenAI: {e}')
 
 async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str):
     client = AsyncOpenAI()
     content = [
-        {"type": "text",      "text": prompt},
+        {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
     ]
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4.1-2025-04-14",
+            messages=[{'role': 'user', 'content': content}]
+        )
+        result = resp.choices[0].message.content
+        async with lock:
+            task_store[task_id]["photo_results"][key] = result
+            if all(isinstance(v, str) for v in task_store[task_id]['photo_results'].values()):
+                task_store[task_id]['photo_status'] = 'done'
+    except Exception as e:
+        async with lock:
+            task_store[task_id]['photo_results'][key] = {'error': str(e)}
+            task_store[task_id]['photo_status'] = 'error'
+
+async def process_survey(task_id: str, survey: SurveyData):
+    survey_dict = survey.dict()
+    try:
+        scores = calculate_survey_scores(survey_dict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка при расчете баллов: {str(e)}")
+    
+    open_questions = {
+        'developmentFeatures': survey_dict.get('developmentFeatures', '') or '',
+        'strengths': survey_dict.get('strengths', '') or '',
+        'attentionAreas': survey_dict.get('attentionAreas', '') or '',
+        'specialists': survey_dict.get('specialists', '') or ''
+    }
+    
+    system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
+    user_prompt = f"""
+    Проанализируйте следующие ответы на открытые вопросы анкеты:
+    1. Особенности развития или поведения ребенка: {open_questions['developmentFeatures']}
+    2. Сильные стороны и таланты ребенка: {open_questions['strengths']}
+    3. Области, требующие особого внимания: {open_questions['attentionAreas']}
+    4. Обращение к специалистам: {open_questions['specialists']}
+    Дайте краткий анализ и рекомендации на основе этих данных.
+    """
     
     try:
-        resp = await client.chat.completions.create(  
-            model="gpt-4.1-2025-04-14",
-            messages=[{'role': 'user', 'content': content}]  
-        )
-        
-        result = resp.choices[0].message.content
-        with lock:
-            task_store[task_id]["results"][key] = result
-            # Проверяем, что все результаты — строки, а не словари с ошибками
-            if all(isinstance(v, str) for v in task_store[task_id]['results'].values()):
-                task_store[task_id]['status'] = 'done'
+        analysis = await request_openai(system=system_prompt, user=user_prompt, model='gpt-4.1-mini', temp=0.1)
     except Exception as e:
-        with lock:
-            task_store[task_id]['results'][key] = {'error': str(e)}
-            task_store[task_id]['status'] = 'error'
-@app.post("/upload")
-async def upload_images(files: List[UploadFile] = File(...)):
-    if len(files) != 3:
-        raise HTTPException(status_code=400, detail="Нужно 3 файла")
-    encoded = []
-    for f in files:
-        if not f.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="Только изображения")
-        data = await f.read()
-        b64 = base64.b64encode(data).decode()
-        encoded.append((f.content_type, b64))
-    task_id = uuid.uuid4().hex
-    with lock:
-        task_store[task_id] = {'status': 'pending', 'results': {'image1': None, 'image2': None, 'image3': None}}
-    prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]  
-    for idx, (mime, b64) in enumerate(encoded, start=1):
-        key = f'image{idx}'
-        asyncio.create_task(process_image(task_id, key, mime, b64, prompts[idx-1]))
-    return JSONResponse(status_code=202, content={'task_id': task_id})
-
-@app.get("/status/{task_id}")
-async def get_status(task_id: str):
-    with lock:
-        task = task_store.get(task_id)
-    if task is None:
-        return {"status": "pending"}
-    if task["status"] == "done":
-        print(task["results"])
-        return {"status": "done", "results": task["results"]}
-    elif task["status"] == "error":
-        return {"status": "error", "errors": {k: v for k, v in task["results"].items() if isinstance(v, dict) and "error" in v}}
-    else:
-        return {"status": "pending"}
+        analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
+    
+    async with lock:
+        task_store[task_id]["survey_results"] = {"scores": scores, "analysis": analysis}
+        task_store[task_id]['survey_status'] = 'done'
 
 def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
-
     sections = {
         'section_1': [f'q1_{i}' for i in range(1, 11)],
         'section_2': [f'q2_{i}' for i in range(1, 11)],
@@ -559,64 +549,50 @@ def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
     scores['total'] = sum(scores[section] for section in sections.keys())
     return scores
 
+@app.post("/upload")
+async def upload_images(files: List[UploadFile] = File(...)):
+    if len(files) != 3:
+        raise HTTPException(status_code=400, detail="Нужно 3 файла")
+    encoded = []
+    for f in files:
+        if not f.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="Только изображения")
+        data = await f.read()
+        b64 = base64.b64encode(data).decode()
+        encoded.append((f.content_type, b64))
+    task_id = str(uuid.uuid4())
+    async with lock:
+        task_store[task_id] = {
+            'photo_status': 'processing',
+            'photo_results': {'image1': None, 'image2': None, 'image3': None},
+            'survey_status': 'pending',
+            'survey_results': None
+        }
+    prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]
+    for idx, (mime, b64) in enumerate(encoded, start=1):
+        key = f'image{idx}'
+        asyncio.create_task(process_image(task_id, key, mime, b64, prompts[idx-1]))
+    return JSONResponse(status_code=202, content={'task_id': task_id, 'status': 'фотографии в обработке'})  # Добавлен статус
+
 @app.post("/submit-survey")
-async def submit_survey(survey_request: AnalysisRequest):
-    survey = survey_request.survey
-    task_id = survey_request.task_id
-    
-    # Проверка наличия task_id
-    with lock:
+async def submit_survey(request: AnalysisRequest):
+    task_id = request.task_id
+    async with lock:
         if task_id not in task_store:
             raise HTTPException(status_code=404, detail="Task not found")
-    
-    # Преобразуем survey в словарь
-    survey_dict = survey.dict()
-    
-    # Рассчитываем баллы
-    try:
-        scores = calculate_survey_scores(survey_dict)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Ошибка при расчете баллов: {str(e)}")
-    
-    # Собираем открытые вопросы
-    open_questions = {
-        'developmentFeatures': survey_dict.get('developmentFeatures', '') or '',
-        'strengths': survey_dict.get('strengths', '') or '',
-        'attentionAreas': survey_dict.get('attentionAreas', '') or '',
-        'specialists': survey_dict.get('specialists', '') or ''
-    }
-    
-    # Промпты для анализа открытых вопросов
-    system_prompt = "Вы — опытный психолог, анализирующий ответы родителей на открытые вопросы анкеты о развитии ребенка."
-    user_prompt = f"""
-    Проанализируйте следующие ответы на открытые вопросы анкеты:
-    1. Особенности развития или поведения ребенка: {open_questions['developmentFeatures']}
-    2. Сильные стороны и таланты ребенка: {open_questions['strengths']}
-    3. Области, требующие особого внимания: {open_questions['attentionAreas']}
-    4. Обращение к специалистам: {open_questions['specialists']}
-    Дайте краткий анализ и рекомендации на основе этих данных.
-    """
-    
-    # Вызов OpenAI API
-    try:
-        analysis = await request(system=system_prompt, user=user_prompt, model='gpt-4.1-mini', temp=0.1)
-    except Exception as e:
-        analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
-    
-    # Сохранение результатов в session_store
-    with lock:
-        session_store[task_id] = {"scores": scores, "analysis": analysis}
-    
-    return {"message": "Анкета успешно отправлена", "task_id": task_id}
+        if task_store[task_id]['survey_status'] != 'pending':
+            raise HTTPException(status_code=400, detail="Опросник уже отправлен или обработан")
+    asyncio.create_task(process_survey(task_id, request.survey))
+    return {"message": "Опросник принят", "task_id": task_id}
+
 
 @app.get("/report/{task_id}")
 async def get_report(task_id: str):
-    with lock:
+    async with lock:
         task = task_store.get(task_id)
-    survey_data = session_store.get(task_id)
-    if not task or not survey_data:
-        raise HTTPException(status_code=404, detail="Task or survey data not found")
-    if task["status"] == "done":
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task['photo_status'] == 'done' and task['survey_status'] == 'done':
         
         final_system = f'''  
         Ты — опытный психолог, анализирующий результаты анализа фотографий и психологического отчёта о ребёнке.
@@ -802,17 +778,19 @@ async def get_report(task_id: str):
         
        
         try:
-            final_analysis = await request(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
+            final_analysis = await request_openai(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
             print('--------------------------------------------')
             print(final_analysis)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
-        return { 
-            "message": final_analysis,
-            "survey_results": f"{final_analysis}",
-            "photo_analysis": " "
+        return {
+            "report": {  # Изменена структура для соответствия исходному коду
+                "photo_analysis": task['photo_results'],
+                "survey_analysis": task['survey_results'],
+                "summary": final_analysis  # Используется результат OpenAI как summary
+            }
         }
-    elif task["status"] == "error":
-        return {"status": "error", "errors": task["results"]}
+    elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
+        return {"status": "error", "errors": task.get('photo_results', {}) | task.get('survey_results', {})}
     else:
-        return {"status": "pending"}
+        return {"status": "в обработке"}
