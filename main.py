@@ -23,7 +23,7 @@ app.add_middleware(
 )
 
 # Подключение к Redis
-redis_client = redis.Redis.from_url(os.environ.get("REDIS_URL"), decode_responses=True)
+redis_client = redis.Redis.from_url(os.environ.get("REDISCLOUD_URL"), decode_responses=True)
 
 class SurveyData(BaseModel):
     childName: str
