@@ -1,26 +1,30 @@
 import asyncio
+import redis
+import os
+import json
+import uuid
+import base64
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
-import uuid
-import base64
 from openai import AsyncOpenAI
 
 app = FastAPI()
 
-# CORS settings
+# Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://siriusfuture.ru", "https://www.siriusfuture.ru", "https://*.tilda.ws", "https://tilda.cc", "https://static.tildacdn.com"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-task_store: Dict[str, Dict] = {}
-lock = asyncio.Lock()
+# Подключение к Redis
+redis_client = redis.Redis.from_url(os.environ.get("REDIS_URL"), decode_responses=True)
+
 class SurveyData(BaseModel):
     childName: str
     childDOB: str
@@ -75,7 +79,6 @@ class SurveyData(BaseModel):
 class AnalysisRequest(BaseModel):
     survey: SurveyData
     task_id: str
-
 
 # Промпт для категории «Дом, Дерево, Человек»
 PROMPT_HOUSE_TREE_PERSON = """Перед тобой — скан или фотография рисунка на тему «Дом, дерево, человек». Твоя задача провести анализ в два этапа:
@@ -493,14 +496,24 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
             messages=[{'role': 'user', 'content': content}]
         )
         result = resp.choices[0].message.content
-        async with lock:
-            task_store[task_id]["photo_results"][key] = result
-            if all(isinstance(v, str) for v in task_store[task_id]['photo_results'].values()):
-                task_store[task_id]['photo_status'] = 'done'
+        task_str = redis_client.get(task_id)
+        if task_str:
+            task = json.loads(task_str)
+            task["photo_results"][key] = result
+            if all(isinstance(v, str) for v in task['photo_results'].values()):
+                task['photo_status'] = 'done'
+            redis_client.set(task_id, json.dumps(task))
+        else:
+            raise HTTPException(status_code=404, detail="Task not found")
     except Exception as e:
-        async with lock:
-            task_store[task_id]['photo_results'][key] = {'error': str(e)}
-            task_store[task_id]['photo_status'] = 'error'
+        task_str = redis_client.get(task_id)
+        if task_str:
+            task = json.loads(task_str)
+            task['photo_results'][key] = {'error': str(e)}
+            task['photo_status'] = 'error'
+            redis_client.set(task_id, json.dumps(task))
+        else:
+            raise HTTPException(status_code=404, detail="Task not found")
 
 async def process_survey(task_id: str, survey: SurveyData):
     survey_dict = survey.dict()
@@ -531,9 +544,14 @@ async def process_survey(task_id: str, survey: SurveyData):
     except Exception as e:
         analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
     
-    async with lock:
-        task_store[task_id]["survey_results"] = {"scores": scores, "analysis": analysis}
-        task_store[task_id]['survey_status'] = 'done'
+    task_str = redis_client.get(task_id)
+    if task_str:
+        task = json.loads(task_str)
+        task["survey_results"] = {"scores": scores, "analysis": analysis}
+        task["survey_status"] = "done"
+        redis_client.set(task_id, json.dumps(task))
+    else:
+        raise HTTPException(status_code=404, detail="Task not found")
 
 def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
     sections = {
@@ -561,37 +579,37 @@ async def upload_images(files: List[UploadFile] = File(...)):
         b64 = base64.b64encode(data).decode()
         encoded.append((f.content_type, b64))
     task_id = str(uuid.uuid4())
-    async with lock:
-        task_store[task_id] = {
-            'photo_status': 'processing',
-            'photo_results': {'image1': None, 'image2': None, 'image3': None},
-            'survey_status': 'pending',
-            'survey_results': None
-        }
+    task = {
+        'photo_status': 'processing',
+        'photo_results': {'image1': None, 'image2': None, 'image3': None},
+        'survey_status': 'pending',
+        'survey_results': None
+    }
+    redis_client.set(task_id, json.dumps(task))
     prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]
     for idx, (mime, b64) in enumerate(encoded, start=1):
         key = f'image{idx}'
         asyncio.create_task(process_image(task_id, key, mime, b64, prompts[idx-1]))
-    return JSONResponse(status_code=202, content={'task_id': task_id, 'status': 'фотографии в обработке'})  # Добавлен статус
+    return JSONResponse(status_code=202, content={'task_id': task_id, 'status': 'фотографии в обработке'})
 
 @app.post("/submit-survey")
 async def submit_survey(request: AnalysisRequest):
     task_id = request.task_id
-    async with lock:
-        if task_id not in task_store:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if task_store[task_id]['survey_status'] != 'pending':
-            raise HTTPException(status_code=400, detail="Опросник уже отправлен или обработан")
+    if not redis_client.exists(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    task_str = redis_client.get(task_id)
+    task = json.loads(task_str)
+    if task['survey_status'] != 'pending':
+        raise HTTPException(status_code=400, detail="Опросник уже отправлен или обработан")
     asyncio.create_task(process_survey(task_id, request.survey))
     return {"message": "Опросник принят", "task_id": task_id}
 
-
 @app.get("/report/{task_id}")
 async def get_report(task_id: str):
-    async with lock:
-        task = task_store.get(task_id)
-    if not task:
+    if not redis_client.exists(task_id):
         raise HTTPException(status_code=404, detail="Task not found")
+    task_str = redis_client.get(task_id)
+    task = json.loads(task_str)
     if task['photo_status'] == 'done' and task['survey_status'] == 'done':
         
         final_system = f'''  
@@ -687,8 +705,8 @@ async def get_report(task_id: str):
         
         
 информация о ребёнке:
-психологический отчёт о ребёнке: {task_store[task_id]["survey_results"]}
-результаты анализа фотографий: {task_store[task_id]["photo_results"]}
+психологический отчёт о ребёнке: {task["survey_results"]}
+результаты анализа фотографий: {task["photo_results"]}
 
 В ответе обязательно сделай отчет по примеру        
 пример того как нужно сделать отчет:  
@@ -783,10 +801,10 @@ async def get_report(task_id: str):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
         return {
-            "report": {  # Изменена структура для соответствия исходному коду
+            "report": {
                 "photo_analysis": task['photo_results'],
                 "survey_analysis": task['survey_results'],
-                "summary": final_analysis  # Используется результат OpenAI как summary
+                "summary": final_analysis
             }
         }
     elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
