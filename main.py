@@ -655,6 +655,23 @@ async def submit_survey(request: AnalysisRequest):
     asyncio.create_task(process_survey(task_id, request.survey))
     return {"message": "Опросник принят", "task_id": task_id}
 
+
+async def generate_pdf_report(task: dict, final_analysis: str):
+    pdf_filename = f"report_{task['task_id']}.pdf"
+    c = canvas.Canvas(pdf_filename, pagesize=letter)
+    c.setFont("Helvetica", 12)
+    c.drawString(100, 750, "Психологический отчет о ребенке")
+    
+    # Добавляем текст анализа в PDF
+    text = c.beginText(100, 730)
+    text.setFont("Helvetica", 10)
+    for line in final_analysis.split('\n'):
+        text.textLine(line)
+    c.drawText(text)
+    
+    c.save()
+    return pdf_filename
+
 @app.get("/report/{task_id}")
 async def get_report(task_id: str):
     if not redis_client.exists(task_id):
@@ -849,15 +866,10 @@ async def get_report(task_id: str):
             final_analysis = await request_openai(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
             print('--------------------------------------------')
             print(final_analysis)
+            pdf_filename = await generate_pdf_report(task, final_analysis)
+            return FileResponse(pdf_filename, media_type='application/pdf', filename=pdf_filename)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
-        return {
-            "report": {
-                "photo_analysis": task['photo_results'],
-                "survey_analysis": task['survey_results'],
-                "summary": final_analysis
-            }
-        }
     elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
         return {"status": "error", "errors": task.get('photo_results', {}) | task.get('survey_results', {})}
     else:
