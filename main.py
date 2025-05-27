@@ -11,6 +11,10 @@ from pydantic import BaseModel
 from typing import Dict, List, Optional
 from openai import AsyncOpenAI
 
+from fastapi.responses import FileResponse
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
 app = FastAPI()
 
 # Настройка CORS
@@ -858,3 +862,27 @@ async def get_report(task_id: str):
         return {"status": "error", "errors": task.get('photo_results', {}) | task.get('survey_results', {})}
     else:
         return {"status": "в обработке"}
+    
+    
+
+
+@app.get("/generate-pdf/{task_id}")
+async def generate_pdf(task_id: str):
+    if not redis_client.exists(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task_str = redis_client.get(task_id)
+    task = json.loads(task_str)
+    
+    if task['photo_status'] != 'done' or task['survey_status'] != 'done':
+        raise HTTPException(status_code=400, detail="Отчет еще не готов")
+    
+    # Генерация PDF
+    pdf_filename = f"report_{task_id}.pdf"
+    c = canvas.Canvas(pdf_filename, pagesize=letter)
+    c.drawString(100, 750, "Психологический отчет")
+    c.drawString(100, 730, f"Анализ фотографий: {task['photo_results']}")
+    c.drawString(100, 710, f"Анализ опроса: {task['survey_results']}")
+    c.save()
+    
+    return FileResponse(pdf_filename, media_type='application/pdf', filename=pdf_filename)

@@ -19,3 +19,4 @@ openai==1.58.1
 python-multipart
 pydantic
 redis
+reportlab
