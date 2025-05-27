@@ -657,12 +657,19 @@ async def submit_survey(request: AnalysisRequest):
 
 
 async def generate_pdf_report(task: dict, final_analysis: str):
+    # Проверка наличия ключа 'task_id'
+    if 'task_id' not in task:
+        raise ValueError("Ключ 'task_id' отсутствует в данных задачи")
+    
+    # Формирование имени файла с использованием task_id
     pdf_filename = f"report_{task['task_id']}.pdf"
+    
+    # Создание PDF
     c = canvas.Canvas(pdf_filename, pagesize=letter)
     c.setFont("Helvetica", 12)
     c.drawString(100, 750, "Психологический отчет о ребенке")
     
-    # Добавляем текст анализа в PDF
+    # Добавление текста анализа
     text = c.beginText(100, 730)
     text.setFont("Helvetica", 10)
     for line in final_analysis.split('\n'):
