@@ -15,12 +15,16 @@ from fastapi.responses import FileResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+import markdown2
+from bs4 import BeautifulSoup
 
-pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
+BASE_DIR = os.path.dirname(__file__)
+pdfmetrics.registerFont(TTFont('DejaVuSans', os.path.join(BASE_DIR, 'DejaVuSans.ttf')))
 
 app = FastAPI()
 
@@ -90,6 +94,27 @@ class SurveyData(BaseModel):
 class AnalysisRequest(BaseModel):
     survey: SurveyData
     task_id: str
+    
+    
+    # Стили
+styles = getSampleStyleSheet()
+styles.add(ParagraphStyle(
+    name='MarkdownBody',
+    parent=styles['BodyText'],
+    fontName='DejaVuSans',
+    fontSize=10,
+    leading=14,
+    spaceAfter=6,
+))
+styles.add(ParagraphStyle(
+    name='MarkdownHeading2',
+    parent=styles['Heading2'],
+    fontName='DejaVuSans',
+    fontSize=12,
+    leading=14,
+    spaceAfter=6,
+))
+
 
 # Промпт для категории «Дом, Дерево, Человек»
 PROMPT_HOUSE_TREE_PERSON = """Перед тобой — скан или фотография рисунка на тему «Дом, дерево, человек». Твоя задача провести анализ в два этапа:
@@ -534,68 +559,46 @@ II. Анализ деталей фигуры:
 
 
 async def generate_pdf_report(task: dict, final_analysis: str):
-    # Проверка наличия ключа 'task_id'
-    if 'task_id' not in task:
-        raise ValueError("Ключ 'task_id' отсутствует в данных задачи")
-    
-    # Формирование имени файла с использованием task_id
     pdf_filename = f"report_{task['task_id']}.pdf"
-    c = canvas.Canvas(pdf_filename, pagesize=letter)
-    width, height = letter
+    doc = SimpleDocTemplate(
+        pdf_filename,
+        pagesize=letter,
+        leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40
+    )
 
+    story = []
     # Заголовок
-    c.setFont("DejaVuSans", 14)
-    c.drawString(40, height - 40, "Психологический отчёт")
-    c.setFont("DejaVuSans", 10)
-    c.drawString(40, height - 60, f"ID задачи: {task['task_id']}")
+    story.append(Paragraph("**Психологический отчёт**", styles['MarkdownHeading2']))
+    story.append(Paragraph(f"ID задачи: {task['task_id']}", styles['MarkdownBody']))
+    story.append(Spacer(1, 12))
 
-    y = height - 80
+    # Фото-результаты & баллы (простыми параграфами)
+    story.append(Paragraph("**Результаты анализа рисунков:**", styles['MarkdownHeading2']))
+    for k, v in task.get('photo_results', {}).items():
+        story.append(Paragraph(f"- **{k}**: {v}", styles['MarkdownBody']))
 
-    # Блок с результатами фотографий
-    c.setFont("DejaVuSans", 12)
-    c.drawString(40, y, "Результаты анализа рисунков:")
-    y -= 20
-    c.setFont("DejaVuSans", 10)
-    for key, val in task.get("photo_results", {}).items():
-        line = f"- {key}: {val}"
-        if y < 60:
-            c.showPage(); y = height - 40
-            c.setFont("DejaVuSans", 10)
-        c.drawString(60, y, line)
-        y -= 14
-
-    # Блок с баллами опросника
-    scores = task.get("survey_results", {}).get("scores", {})
+    scores = task.get('survey_results', {}).get('scores', {})
     if scores:
-        if y < 80:
-            c.showPage(); y = height - 40
-        c.setFont("DejaVuSans", 12)
-        c.drawString(40, y, "Баллы опросника:")
-        y -= 20
-        c.setFont("DejaVuSans", 10)
-        for section, score in scores.items():
-            line = f"{section}: {score}"
-            if y < 60:
-                c.showPage(); y = height - 40
-                c.setFont("DejaVuSans", 10)
-            c.drawString(60, y, line)
-            y -= 14
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("**Баллы опросника:**", styles['MarkdownHeading2']))
+        for sec, sc in scores.items():
+            story.append(Paragraph(f"- **{sec}**: {sc}", styles['MarkdownBody']))
 
-    # Основная часть: final_analysis
-    if y < 80:
-        c.showPage(); y = height - 40
-    text = c.beginText(40, y)
-    text.setFont("DejaVuSans", 10)
-    for line in final_analysis.split("\n"):
-        if text.getY() < 60:
-            c.drawText(text)
-            c.showPage()
-            text = c.beginText(40, height - 40)
-            text.setFont("DejaVuSans", 10)
-        text.textLine(line)
-    c.drawText(text)
+    # Основной Markdown → HTML → Paragraph
+    story.append(PageBreak())
+    html = markdown2.markdown(final_analysis, extras=["fenced-code-blocks"])
+    # Разбиваем на теги
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    for el in soup.children:
+        text = str(el)
+        if el.name in ('h1','h2','h3'):
+            style = styles['MarkdownHeading2']
+        else:
+            style = styles['MarkdownBody']
+        story.append(Paragraph(text, style))
 
-    c.save()
+    doc.build(story)
     return pdf_filename
 
 
