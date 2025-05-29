@@ -20,5 +20,5 @@ python-multipart
 pydantic
 redis
 reportlab
-markdown2>=2.4.0
+markdown
 beautifulsoup4>=4.12.0

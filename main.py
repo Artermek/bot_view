@@ -15,12 +15,12 @@ from fastapi.responses import FileResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-import markdown2
+import markdown
 from bs4 import BeautifulSoup
 
 pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
@@ -94,47 +94,12 @@ class AnalysisRequest(BaseModel):
     survey: SurveyData
     task_id: str
     
-    
-    # Стили
+# Настройка стилей
 styles = getSampleStyleSheet()
-
-# Переопределяем базовый Normal
-styles['Normal'].fontName = 'DejaVuSans'
-styles['Normal'].fontSize = 10
-styles['Normal'].leading = 14
-
-# Заголовок
-styles.add(ParagraphStyle(
-    name='TitleCJ',
-    parent=styles['Heading1'],
-    fontName='DejaVuSans',
-    fontSize=16,
-    leading=20,
-    spaceAfter=12,
-))
-styles.add(ParagraphStyle(
-    name='Heading2CJ',
-    parent=styles['Heading2'],
-    fontName='DejaVuSans',
-    fontSize=12,
-    leading=16,
-    spaceBefore=12,
-    spaceAfter=6,
-))
-# Уникальное имя для «сырых» блоков
-styles.add(ParagraphStyle(
-    name='MarkdownRaw',
-    parent=styles['Code'],       # можно взять от базового Code
-    fontName='DejaVuSans',
-    fontSize=9,
-    leading=12,
-    leftIndent=12,
-    rightIndent=12,
-    spaceBefore=6,
-    spaceAfter=6,
-))
-
-
+styles.add(ParagraphStyle(name='TitleCJ', fontName='DejaVuSans', fontSize=16, leading=20))
+styles.add(ParagraphStyle(name='Heading1', fontName='DejaVuSans', fontSize=14, leading=18))
+styles.add(ParagraphStyle(name='Heading2CJ', fontName='DejaVuSans', fontSize=12, leading=16))
+styles.add(ParagraphStyle(name='Normal', fontName='DejaVuSans', fontSize=10, leading=12))
 
 # Промпт для категории «Дом, Дерево, Человек»
 PROMPT_HOUSE_TREE_PERSON = """Перед тобой — скан или фотография рисунка на тему «Дом, дерево, человек». Твоя задача провести анализ в два этапа:
@@ -578,11 +543,32 @@ II. Анализ деталей фигуры:
 """.strip()
 
 
+def parse_markdown_to_flowables(md_text, styles):
+    """Парсит Markdown и преобразует его в элементы ReportLab."""
+    html = markdown.markdown(md_text)
+    soup = BeautifulSoup(html, 'html.parser')
+    flowables = []
+    for element in soup.children:
+        if element.name == 'h1':
+            flowables.append(Paragraph(element.text, styles['Heading1']))
+        elif element.name == 'h2':
+            flowables.append(Paragraph(element.text, styles['Heading2CJ']))
+        elif element.name == 'p':
+            flowables.append(Paragraph(element.text, styles['Normal']))
+        elif element.name == 'ul':
+            items = [ListItem(Paragraph(li.text, styles['Normal'])) for li in element.find_all('li')]
+            flowables.append(ListFlowable(items, bulletType='bullet'))
+        elif element.name == 'strong':
+            flowables.append(Paragraph(f"<b>{element.text}</b>", styles['Normal']))
+        elif element.name == 'em':
+            flowables.append(Paragraph(f"<i>{element.text}</i>", styles['Normal']))
+        else:
+            flowables.append(Paragraph(element.text, styles['Normal']))
+        flowables.append(Spacer(1, 6))
+    return flowables
+
 async def generate_pdf_report(task: dict, final_analysis: str):
-    """
-    task: словарь с ключами task_id, photo_results, survey_results['scores']
-    final_analysis: полный Markdown-текст отчёта (с эмоджи, таблицами, списками и т.д.)
-    """
+    """Генерирует PDF-отчёт с поддержкой Markdown и эмодзи."""
     pdf_path = f"report_{task['task_id']}.pdf"
     doc = SimpleDocTemplate(
         pdf_path,
@@ -592,16 +578,19 @@ async def generate_pdf_report(task: dict, final_analysis: str):
     )
     story = []
 
-    # Заголовок
+    # Заголовок с эмодзи
     story.append(Paragraph("📋 Психологический отчёт о ребёнке", styles['TitleCJ']))
     story.append(Paragraph(f"🆔 ID задачи: {task['task_id']}", styles['Normal']))
+    story.append(Spacer(1, 12))
+
+    # Основной анализ
+    story.extend(parse_markdown_to_flowables(final_analysis, styles))
     story.append(Spacer(1, 12))
 
     # Результаты анализа рисунков
     story.append(Paragraph("## Результаты анализа рисунков:", styles['Heading2CJ']))
     for key, val in task.get('photo_results', {}).items():
-        # сохраняем Markdown-звёздочки и эмоджи
-        story.append(Paragraph(f"* **{key}**: {val}", styles['Normal']))
+        story.extend(parse_markdown_to_flowables(f"* **{key}**: {val}", styles))
     story.append(Spacer(1, 12))
 
     # Баллы опросника
@@ -611,10 +600,6 @@ async def generate_pdf_report(task: dict, final_analysis: str):
         for sec, sc in scores.items():
             story.append(Paragraph(f"* {sec}: {sc}", styles['Normal']))
         story.append(Spacer(1, 12))
-
-    # Основной анализ — «сырым» блоком, чтобы сохранить таблицы и разметку
-    story.append(PageBreak())
-    story.append(Preformatted(final_analysis, styles['MarkdownRaw']))
 
     # Собираем документ
     doc.build(story)
