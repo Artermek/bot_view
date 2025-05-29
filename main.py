@@ -614,7 +614,7 @@ async def generate_pdf_report(task: dict, final_analysis: str):
 
     # Основной анализ — «сырым» блоком, чтобы сохранить таблицы и разметку
     story.append(PageBreak())
-    story.append(Preformatted(final_analysis, styles['Code']))
+    story.append(Preformatted(final_analysis, styles['MarkdownRaw']))
 
     # Собираем документ
     doc.build(story)
