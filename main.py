@@ -631,6 +631,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
         encoded.append((f.content_type, b64))
     task_id = str(uuid.uuid4())
     task = {
+        'task_id': task_id,
         'photo_status': 'processing',
         'photo_results': {'image1': None, 'image2': None, 'image3': None},
         'survey_status': 'pending',
@@ -664,18 +665,20 @@ async def generate_pdf_report(task: dict, final_analysis: str):
     # Формирование имени файла с использованием task_id
     pdf_filename = f"report_{task['task_id']}.pdf"
     
-    # Создание PDF
     c = canvas.Canvas(pdf_filename, pagesize=letter)
     c.setFont("Helvetica", 12)
-    c.drawString(100, 750, "Психологический отчет о ребенке")
+    c.drawString(100, 750, "Отчет по задаче")
+    c.drawString(100, 730, f"ID задачи: {task['task_id']}")
     
-    # Добавление текста анализа
-    text = c.beginText(100, 730)
-    text.setFont("Helvetica", 10)
-    for line in final_analysis.split('\n'):
-        text.textLine(line)
-    c.drawText(text)
-    
+    if 'survey_results' in task and 'analysis' in task['survey_results']:
+        analysis = task['survey_results']['analysis']
+        text = c.beginText(100, 700)
+        text.setFont("Helvetica", 10)
+        for line in analysis.split('\n'):
+            text.textLine(line)
+        c.drawText(text)
+    else:
+        c.drawString(100, 700, "Анализ отсутствует.")
     c.save()
     return pdf_filename
 
@@ -874,7 +877,9 @@ async def get_report(task_id: str):
             print('--------------------------------------------')
             print(final_analysis)
             pdf_filename = await generate_pdf_report(task, final_analysis)
-            return FileResponse(pdf_filename, media_type='application/pdf', filename=pdf_filename)
+            if not os.path.exists(pdf_filename):
+                raise HTTPException(status_code=500, detail="PDF файл не был создан")
+            return FileResponse(pdf_filename, media_type='application/pdf', filename=f"report_{task_id}.pdf")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
     elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
