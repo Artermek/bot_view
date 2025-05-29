@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
@@ -97,20 +97,43 @@ class AnalysisRequest(BaseModel):
     
     # Стили
 styles = getSampleStyleSheet()
+
+# Переопределяем базовый Normal
+styles['Normal'].fontName = 'DejaVuSans'
+styles['Normal'].fontSize = 10
+styles['Normal'].leading = 14
+
+# Заголовок
 styles.add(ParagraphStyle(
-    name='MarkdownBody',
-    parent=styles['BodyText'],
+    name='TitleCJ',
+    parent=styles['Heading1'],
     fontName='DejaVuSans',
-    fontSize=10,
-    leading=14,
-    spaceAfter=6,
+    fontSize=16,
+    leading=20,
+    spaceAfter=12,
 ))
+
+# Разделы
 styles.add(ParagraphStyle(
-    name='MarkdownHeading2',
+    name='Heading2CJ',
     parent=styles['Heading2'],
     fontName='DejaVuSans',
     fontSize=12,
-    leading=14,
+    leading=16,
+    spaceBefore=12,
+    spaceAfter=6,
+))
+
+# Для «сырых» блоков Markdown
+styles.add(ParagraphStyle(
+    name='Code',
+    parent=styles['Code'],
+    fontName='DejaVuSans',
+    fontSize=9,
+    leading=12,
+    leftIndent=12,
+    rightIndent=12,
+    spaceBefore=6,
     spaceAfter=6,
 ))
 
@@ -558,47 +581,46 @@ II. Анализ деталей фигуры:
 
 
 async def generate_pdf_report(task: dict, final_analysis: str):
-    pdf_filename = f"report_{task['task_id']}.pdf"
+    """
+    task: словарь с ключами task_id, photo_results, survey_results['scores']
+    final_analysis: полный Markdown-текст отчёта (с эмоджи, таблицами, списками и т.д.)
+    """
+    pdf_path = f"report_{task['task_id']}.pdf"
     doc = SimpleDocTemplate(
-        pdf_filename,
+        pdf_path,
         pagesize=letter,
-        leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40
+        leftMargin=40, rightMargin=40,
+        topMargin=40, bottomMargin=40
     )
-
     story = []
+
     # Заголовок
-    story.append(Paragraph("**Психологический отчёт**", styles['MarkdownHeading2']))
-    story.append(Paragraph(f"ID задачи: {task['task_id']}", styles['MarkdownBody']))
+    story.append(Paragraph("📋 Психологический отчёт о ребёнке", styles['TitleCJ']))
+    story.append(Paragraph(f"🆔 ID задачи: {task['task_id']}", styles['Normal']))
     story.append(Spacer(1, 12))
 
-    # Фото-результаты & баллы (простыми параграфами)
-    story.append(Paragraph("**Результаты анализа рисунков:**", styles['MarkdownHeading2']))
-    for k, v in task.get('photo_results', {}).items():
-        story.append(Paragraph(f"- **{k}**: {v}", styles['MarkdownBody']))
+    # Результаты анализа рисунков
+    story.append(Paragraph("## Результаты анализа рисунков:", styles['Heading2CJ']))
+    for key, val in task.get('photo_results', {}).items():
+        # сохраняем Markdown-звёздочки и эмоджи
+        story.append(Paragraph(f"* **{key}**: {val}", styles['Normal']))
+    story.append(Spacer(1, 12))
 
+    # Баллы опросника
     scores = task.get('survey_results', {}).get('scores', {})
     if scores:
-        story.append(Spacer(1, 12))
-        story.append(Paragraph("**Баллы опросника:**", styles['MarkdownHeading2']))
+        story.append(Paragraph("## Баллы опросника:", styles['Heading2CJ']))
         for sec, sc in scores.items():
-            story.append(Paragraph(f"- **{sec}**: {sc}", styles['MarkdownBody']))
+            story.append(Paragraph(f"* {sec}: {sc}", styles['Normal']))
+        story.append(Spacer(1, 12))
 
-    # Основной Markdown → HTML → Paragraph
+    # Основной анализ — «сырым» блоком, чтобы сохранить таблицы и разметку
     story.append(PageBreak())
-    html = markdown2.markdown(final_analysis, extras=["fenced-code-blocks"])
-    # Разбиваем на теги
-    
-    soup = BeautifulSoup(html, 'html.parser')
-    for el in soup.children:
-        text = str(el)
-        if el.name in ('h1','h2','h3'):
-            style = styles['MarkdownHeading2']
-        else:
-            style = styles['MarkdownBody']
-        story.append(Paragraph(text, style))
+    story.append(Preformatted(final_analysis, styles['Code']))
 
+    # Собираем документ
     doc.build(story)
-    return pdf_filename
+    return pdf_path
 
 
 async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
