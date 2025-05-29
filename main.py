@@ -112,8 +112,6 @@ styles.add(ParagraphStyle(
     leading=20,
     spaceAfter=12,
 ))
-
-# Разделы
 styles.add(ParagraphStyle(
     name='Heading2CJ',
     parent=styles['Heading2'],
@@ -123,11 +121,10 @@ styles.add(ParagraphStyle(
     spaceBefore=12,
     spaceAfter=6,
 ))
-
-# Для «сырых» блоков Markdown
+# Уникальное имя для «сырых» блоков
 styles.add(ParagraphStyle(
-    name='Code',
-    parent=styles['Code'],
+    name='MarkdownRaw',
+    parent=styles['Code'],       # можно взять от базового Code
     fontName='DejaVuSans',
     fontSize=9,
     leading=12,
@@ -136,6 +133,7 @@ styles.add(ParagraphStyle(
     spaceBefore=6,
     spaceAfter=6,
 ))
+
 
 
 # Промпт для категории «Дом, Дерево, Человек»
