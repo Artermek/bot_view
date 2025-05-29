@@ -15,6 +15,13 @@ from fastapi.responses import FileResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
+
 app = FastAPI()
 
 # Настройка CORS
@@ -666,14 +673,14 @@ async def generate_pdf_report(task: dict, final_analysis: str):
     pdf_filename = f"report_{task['task_id']}.pdf"
     
     c = canvas.Canvas(pdf_filename, pagesize=letter)
-    c.setFont("Helvetica", 12)
+    c.setFont("DejaVuSans", 12)
     c.drawString(100, 750, "Отчет по задаче")
     c.drawString(100, 730, f"ID задачи: {task['task_id']}")
     
     if 'survey_results' in task and 'analysis' in task['survey_results']:
         analysis = task['survey_results']['analysis']
         text = c.beginText(100, 700)
-        text.setFont("Helvetica", 10)
+        text.setFont("DejaVuSans", 10)
         for line in analysis.split('\n'):
             text.textLine(line)
         c.drawText(text)
