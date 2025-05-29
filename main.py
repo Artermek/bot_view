@@ -23,8 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 import markdown2
 from bs4 import BeautifulSoup
 
-BASE_DIR = os.path.dirname(__file__)
-pdfmetrics.registerFont(TTFont('DejaVuSans', os.path.join(BASE_DIR, 'DejaVuSans.ttf')))
+pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
 
 app = FastAPI()
 
