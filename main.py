@@ -533,6 +533,72 @@ II. Анализ деталей фигуры:
 """.strip()
 
 
+async def generate_pdf_report(task: dict, final_analysis: str):
+    # Проверка наличия ключа 'task_id'
+    if 'task_id' not in task:
+        raise ValueError("Ключ 'task_id' отсутствует в данных задачи")
+    
+    # Формирование имени файла с использованием task_id
+    pdf_filename = f"report_{task['task_id']}.pdf"
+    c = canvas.Canvas(pdf_filename, pagesize=letter)
+    width, height = letter
+
+    # Заголовок
+    c.setFont("DejaVuSans", 14)
+    c.drawString(40, height - 40, "Психологический отчёт")
+    c.setFont("DejaVuSans", 10)
+    c.drawString(40, height - 60, f"ID задачи: {task['task_id']}")
+
+    y = height - 80
+
+    # Блок с результатами фотографий
+    c.setFont("DejaVuSans", 12)
+    c.drawString(40, y, "Результаты анализа рисунков:")
+    y -= 20
+    c.setFont("DejaVuSans", 10)
+    for key, val in task.get("photo_results", {}).items():
+        line = f"- {key}: {val}"
+        if y < 60:
+            c.showPage(); y = height - 40
+            c.setFont("DejaVuSans", 10)
+        c.drawString(60, y, line)
+        y -= 14
+
+    # Блок с баллами опросника
+    scores = task.get("survey_results", {}).get("scores", {})
+    if scores:
+        if y < 80:
+            c.showPage(); y = height - 40
+        c.setFont("DejaVuSans", 12)
+        c.drawString(40, y, "Баллы опросника:")
+        y -= 20
+        c.setFont("DejaVuSans", 10)
+        for section, score in scores.items():
+            line = f"{section}: {score}"
+            if y < 60:
+                c.showPage(); y = height - 40
+                c.setFont("DejaVuSans", 10)
+            c.drawString(60, y, line)
+            y -= 14
+
+    # Основная часть: final_analysis
+    if y < 80:
+        c.showPage(); y = height - 40
+    text = c.beginText(40, y)
+    text.setFont("DejaVuSans", 10)
+    for line in final_analysis.split("\n"):
+        if text.getY() < 60:
+            c.drawText(text)
+            c.showPage()
+            text = c.beginText(40, height - 40)
+            text.setFont("DejaVuSans", 10)
+        text.textLine(line)
+    c.drawText(text)
+
+    c.save()
+    return pdf_filename
+
+
 async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
     client = AsyncOpenAI()
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
@@ -664,70 +730,6 @@ async def submit_survey(request: AnalysisRequest):
     return {"message": "Опросник принят", "task_id": task_id}
 
 
-async def generate_pdf_report(task: dict, final_analysis: str):
-    # Проверка наличия ключа 'task_id'
-    if 'task_id' not in task:
-        raise ValueError("Ключ 'task_id' отсутствует в данных задачи")
-    
-    # Формирование имени файла с использованием task_id
-    pdf_filename = f"report_{task['task_id']}.pdf"
-    c = canvas.Canvas(pdf_filename, pagesize=letter)
-    width, height = letter
-
-    # Заголовок
-    c.setFont("DejaVuSans", 14)
-    c.drawString(40, height - 40, "Психологический отчёт")
-    c.setFont("DejaVuSans", 10)
-    c.drawString(40, height - 60, f"ID задачи: {task['task_id']}")
-
-    y = height - 80
-
-    # Блок с результатами фотографий
-    c.setFont("DejaVuSans", 12)
-    c.drawString(40, y, "Результаты анализа рисунков:")
-    y -= 20
-    c.setFont("DejaVuSans", 10)
-    for key, val in task.get("photo_results", {}).items():
-        line = f"- {key}: {val}"
-        if y < 60:
-            c.showPage(); y = height - 40
-            c.setFont("DejaVuSans", 10)
-        c.drawString(60, y, line)
-        y -= 14
-
-    # Блок с баллами опросника
-    scores = task.get("survey_results", {}).get("scores", {})
-    if scores:
-        if y < 80:
-            c.showPage(); y = height - 40
-        c.setFont("DejaVuSans", 12)
-        c.drawString(40, y, "Баллы опросника:")
-        y -= 20
-        c.setFont("DejaVuSans", 10)
-        for section, score in scores.items():
-            line = f"{section}: {score}"
-            if y < 60:
-                c.showPage(); y = height - 40
-                c.setFont("DejaVuSans", 10)
-            c.drawString(60, y, line)
-            y -= 14
-
-    # Основная часть: final_analysis
-    if y < 80:
-        c.showPage(); y = height - 40
-    text = c.beginText(40, y)
-    text.setFont("DejaVuSans", 10)
-    for line in final_analysis.split("\n"):
-        if text.getY() < 60:
-            c.drawText(text)
-            c.showPage()
-            text = c.beginText(40, height - 40)
-            text.setFont("DejaVuSans", 10)
-        text.textLine(line)
-    c.drawText(text)
-
-    c.save()
-    return pdf_filename
 
 @app.get("/report/{task_id}")
 async def get_report(task_id: str):
