@@ -15,15 +15,98 @@ from fastapi.responses import FileResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-from reportlab.lib.pagesizes import letter
+
+from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+from reportlab.lib.units import inch, cm
+from reportlab.lib.colors import HexColor, black
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 import markdown
 from bs4 import BeautifulSoup
+import os
 
-pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
+# Регистрируем шрифт NotoSans для поддержки эмодзи
+try:
+    pdfmetrics.registerFont(TTFont('NotoSans', 'NotoSans-Regular.ttf'))
+    pdfmetrics.registerFont(TTFont('NotoSans-Bold', 'NotoSans-Bold.ttf'))
+    FONT_NAME = 'NotoSans'
+    FONT_BOLD = 'NotoSans-Bold'
+except:
+    # Fallback к системному шрифту если NotoSans недоступен
+    FONT_NAME = 'Helvetica'
+    FONT_BOLD = 'Helvetica-Bold'
+
+# Настройка стилей для PDF
+def setup_styles():
+    styles = getSampleStyleSheet()
+    
+    # Основной заголовок
+    styles.add(ParagraphStyle(
+        name='MainTitle',
+        fontName=FONT_BOLD,
+        fontSize=18,
+        leading=22,
+        alignment=TA_CENTER,
+        spaceAfter=20,
+        textColor=black
+    ))
+    
+    # Заголовок секции
+    styles.add(ParagraphStyle(
+        name='SectionHeader',
+        fontName=FONT_BOLD,
+        fontSize=14,
+        leading=18,
+        spaceBefore=15,
+        spaceAfter=10,
+        textColor=HexColor('#2E5BBA')
+    ))
+    
+    # Подзаголовок
+    styles.add(ParagraphStyle(
+        name='SubHeader',
+        fontName=FONT_BOLD,
+        fontSize=12,
+        leading=16,
+        spaceBefore=10,
+        spaceAfter=8,
+        textColor=HexColor('#444444')
+    ))
+    
+    # Обычный текст
+    styles.add(ParagraphStyle(
+        name='NormalText',
+        fontName=FONT_NAME,
+        fontSize=10,
+        leading=14,
+        alignment=TA_JUSTIFY,
+        spaceAfter=6
+    ))
+    
+    # Текст для таблиц
+    styles.add(ParagraphStyle(
+        name='TableText',
+        fontName=FONT_NAME,
+        fontSize=9,
+        leading=12,
+        alignment=TA_LEFT
+    ))
+    
+    # Стиль для рекомендаций
+    styles.add(ParagraphStyle(
+        name='Recommendation',
+        fontName=FONT_NAME,
+        fontSize=10,
+        leading=14,
+        leftIndent=15,
+        spaceAfter=8,
+        bulletIndent=10
+    ))
+    
+    return styles
 
 app = FastAPI()
 
@@ -580,71 +663,244 @@ II. Анализ деталей фигуры:
 
 """.strip()
 
+def create_child_info_section(task, styles):
+    """Создает секцию с информацией о ребенке"""
+    story = []
+    survey = task.get('survey', {})
+    
+    story.append(Paragraph("👶 Информация о ребенке", styles['SectionHeader']))
+    
+    # Таблица с основной информацией
+    data = [
+        ['Имя ребенка:', survey.get('childName', 'Не указано')],
+        ['Дата рождения:', survey.get('childDOB', 'Не указано')],
+        ['Пол:', survey.get('childGender', 'Не указано')],
+        ['Имя родителя:', survey.get('parentName', 'Не указано')]
+    ]
+    
+    table = Table(data, colWidths=[4*cm, 8*cm])
+    table.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, -1), FONT_NAME),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    
+    story.append(table)
+    story.append(Spacer(1, 15))
+    
+    return story
+
+def create_analysis_section(final_analysis, styles):
+    """Создает секцию анализа развития"""
+    story = []
+    story.append(Paragraph("🧠 Анализ развития", styles['SectionHeader']))
+    
+    # Парсинг markdown анализа
+    if final_analysis:
+        flowables = parse_markdown_to_flowables(final_analysis, styles)
+        story.extend(flowables)
+    
+    story.append(Spacer(1, 15))
+    return story
+
+def create_scores_section(task, styles):
+    """Создает секцию с баллами опросника"""
+    story = []
+    scores = task.get('survey_results', {}).get('scores', {})
+    
+    if not scores:
+        return story
+    
+    story.append(Paragraph("📊 Результаты опросника", styles['SectionHeader']))
+    
+    # Создаем таблицу с баллами
+    data = [['Раздел', 'Балл из 50']]
+    
+    section_names = {
+        'section1': 'Раздел 1',
+        'section2': 'Раздел 2', 
+        'section3': 'Раздел 3',
+        'section4': 'Раздел 4',
+        'total': 'Итого'
+    }
+    
+    for section, score in scores.items():
+        section_display = section_names.get(section, section)
+        data.append([section_display, str(score)])
+    
+    table = Table(data, colWidths=[8*cm, 4*cm])
+    table.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
+        ('FONTNAME', (0, 1), (-1, -1), FONT_NAME),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 1, HexColor('#CCCCCC')),
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#E8F4FD')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    
+    story.append(table)
+    story.append(Spacer(1, 15))
+    
+    return story
+
+def create_drawing_analysis_section(task, styles):
+    """Создает секцию анализа рисунков"""
+    story = []
+    photo_results = task.get('photo_results', {})
+    
+    if not photo_results:
+        return story
+    
+    story.append(Paragraph("🎨 Анализ рисунков", styles['SectionHeader']))
+    
+    for drawing_name, analysis in photo_results.items():
+        story.append(Paragraph(f"<b>{drawing_name}:</b>", styles['SubHeader']))
+        story.append(Paragraph(analysis, styles['NormalText']))
+        story.append(Spacer(1, 8))
+    
+    story.append(Spacer(1, 15))
+    return story
+
+def create_recommendations_section(task, styles):
+    """Создает секцию рекомендаций"""
+    story = []
+    survey = task.get('survey', {})
+    
+    story.append(Paragraph("💡 Рекомендации для родителей", styles['SectionHeader']))
+    
+    # Рекомендации на основе данных опроса
+    recommendations = []
+    
+    if survey.get('specialists'):
+        recommendations.append(f"• Рекомендуется консультация со специалистами: {survey['specialists']}")
+    
+    if survey.get('attentionAreas'):
+        recommendations.append(f"• Области, требующие внимания: {survey['attentionAreas']}")
+    
+    if survey.get('strengths'):
+        recommendations.append(f"• Сильные стороны ребенка: {survey['strengths']}")
+    
+    if survey.get('developmentFeatures'):
+        recommendations.append(f"• Особенности развития: {survey['developmentFeatures']}")
+    
+    # Общие рекомендации
+    general_recommendations = [
+        "• Поддерживайте позитивную атмосферу в семье",
+        "• Уделяйте время совместным занятиям и играм",
+        "• Обращайте внимание на эмоциональное состояние ребенка",
+        "• При необходимости обращайтесь к детскому психологу для консультации",
+        "• Следите за режимом дня и качеством сна ребенка"
+    ]
+    
+    all_recommendations = recommendations + general_recommendations
+    
+    for rec in all_recommendations:
+        story.append(Paragraph(rec, styles['Recommendation']))
+    
+    story.append(Spacer(1, 15))
+    return story
 
 def parse_markdown_to_flowables(md_text, styles):
-    """Парсит Markdown и преобразует его в элементы ReportLab."""
+    """Парсит Markdown и преобразует его в элементы ReportLab с поддержкой эмодзи"""
+    if not md_text:
+        return []
+    
     html = markdown.markdown(md_text)
     soup = BeautifulSoup(html, 'html.parser')
     flowables = []
+    
     for element in soup.children:
-        if element.name == 'h1':
-            flowables.append(Paragraph(element.text, styles['Heading1']))
-        elif element.name == 'h2':
-            flowables.append(Paragraph(element.text, styles['Heading2CJ']))
-        elif element.name == 'p':
-            flowables.append(Paragraph(element.text, styles['NormalCJ']))
-        elif element.name == 'ul':
-            items = [ListItem(Paragraph(li.text, styles['NormalCJ'])) for li in element.find_all('li')]
-            flowables.append(ListFlowable(items, bulletType='bullet'))
-        elif element.name == 'strong':
-            flowables.append(Paragraph(f"<b>{element.text}</b>", styles['NormalCJ']))
-        elif element.name == 'em':
-            flowables.append(Paragraph(f"<i>{element.text}</i>", styles['NormalCJ']))
-        elif element.text.strip():
-            flowables.append(Paragraph(element.text, styles['NormalCJ']))
-        flowables.append(Spacer(1, 6))
+        if hasattr(element, 'name'):
+            if element.name == 'h1':
+                flowables.append(Paragraph(element.get_text(), styles['SectionHeader']))
+            elif element.name == 'h2':
+                flowables.append(Paragraph(element.get_text(), styles['SubHeader']))
+            elif element.name == 'p':
+                text = element.get_text()
+                if text.strip():
+                    flowables.append(Paragraph(text, styles['NormalText']))
+            elif element.name == 'ul':
+                for li in element.find_all('li'):
+                    text = li.get_text()
+                    if text.strip():
+                        flowables.append(Paragraph(f"• {text}", styles['Recommendation']))
+        elif hasattr(element, 'strip') and element.strip():
+            flowables.append(Paragraph(element.strip(), styles['NormalText']))
+    
     return flowables
 
 async def generate_pdf_report(task: dict, final_analysis: str):
-    """Генерирует PDF-отчёт с поддержкой Markdown и эмодзи."""
+    """Генерирует PDF-отчёт с поддержкой эмодзи и улучшенным форматированием"""
     pdf_path = f"report_{task['task_id']}.pdf"
+    
+    # Создаем документ
     doc = SimpleDocTemplate(
         pdf_path,
-        pagesize=letter,
-        leftMargin=40, rightMargin=40,
-        topMargin=40, bottomMargin=40
+        pagesize=A4,
+        leftMargin=2*cm,
+        rightMargin=2*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
     )
+    
+    # Получаем стили
+    styles = setup_styles()
     story = []
-
-    # Заголовок с эмодзи
-    story.append(Paragraph("📋 Психологический отчёт о ребёнке", styles['TitleCJ']))
-    story.append(Paragraph(f"🆔 ID задачи: {task['task_id']}", styles['NormalCJ']))
-    story.append(Spacer(1, 12))
-
-    # Основной анализ
-    story.append(Paragraph("Анализ:", styles['Heading2CJ']))
-    story.extend(parse_markdown_to_flowables(final_analysis, styles))
-    story.append(Spacer(1, 12))
-
-    # Результаты анализа рисунков
-    story.append(Paragraph("Результаты анализа рисунков:", styles['Heading2CJ']))
-    for key, val in task.get('photo_results', {}).items():
-        story.extend(parse_markdown_to_flowables(f"* **{key}**: {val}", styles))
-    story.append(Spacer(1, 12))
-
-    # Баллы опросника
-    scores = task.get('survey_results', {}).get('scores', {})
-    if scores:
-        story.append(Paragraph("Баллы опросника:", styles['Heading2CJ']))
-        for sec, sc in scores.items():
-            story.extend(parse_markdown_to_flowables(f"* {sec}: {sc}", styles))
-        story.append(Spacer(1, 12))
-
+    
+    # Заголовок отчета с эмодзи
+    story.append(Paragraph("📋 Психологический отчёт о развитии ребенка", styles['MainTitle']))
+    story.append(Paragraph(f"🆔 ID отчета: {task['task_id']}", styles['NormalText']))
+    story.append(Spacer(1, 20))
+    
+    # Основные секции отчета
+    story.extend(create_child_info_section(task, styles))
+    story.extend(create_analysis_section(final_analysis, styles))
+    story.extend(create_scores_section(task, styles))
+    story.extend(create_drawing_analysis_section(task, styles))
+    story.extend(create_recommendations_section(task, styles))
+    
+    # Подвал с датой создания
+    from datetime import datetime
+    story.append(Spacer(1, 20))
+    story.append(Paragraph(
+        f"📅 Отчет создан: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+        styles['NormalText']
+    ))
+    
     # Собираем документ
-    doc.build(story)
-    return pdf_path
+    try:
+        doc.build(story)
+        return pdf_path
+    except Exception as e:
+        print(f"Ошибка при создании PDF: {e}")
+        raise
 
+# Дополнительные функции для интеграции с существующим кодом
 
+def format_survey_data_for_pdf(survey_data: SurveyData) -> dict:
+    """Форматирует данные опроса для использования в PDF"""
+    return {
+        'childName': survey_data.childName,
+        'childDOB': survey_data.childDOB,
+        'childGender': survey_data.childGender,
+        'parentName': survey_data.parentName,
+        'emotionalState': survey_data.emotionalState,
+        'developmentFeatures': survey_data.developmentFeatures,
+        'strengths': survey_data.strengths,
+        'attentionAreas': survey_data.attentionAreas,
+        'specialists': survey_data.specialists
+    }
 async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
     client = AsyncOpenAI()
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
