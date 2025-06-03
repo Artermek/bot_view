@@ -10,23 +10,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from openai import AsyncOpenAI
-
 from fastapi.responses import FileResponse
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch, cm
+from reportlab.lib.units import cm
 from reportlab.lib.colors import HexColor, black
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 import markdown
 from bs4 import BeautifulSoup
-import os
-
+from datetime import datetime
 
 # Регистрируем шрифты с поддержкой русского языка и эмодзи
 def register_fonts():
@@ -44,7 +39,7 @@ def register_fonts():
             return 'DejaVuSans', 'DejaVuSans-Bold'
         except:
             try:
-                # Fallback 2: Liberation Sans (свободная альтернativa Arial)
+                # Fallback 2: Liberation Sans (свободная альтернатива Arial)
                 pdfmetrics.registerFont(TTFont('LiberationSans', 'fonts/LiberationSans-Regular.ttf'))
                 pdfmetrics.registerFont(TTFont('LiberationSans-Bold', 'fonts/LiberationSans-Bold.ttf'))
                 return 'LiberationSans', 'LiberationSans-Bold'
@@ -53,35 +48,8 @@ def register_fonts():
                 print("Предупреждение: Не найдены шрифты с поддержкой кириллицы. Эмодзи могут не отображаться.")
                 return 'Helvetica', 'Helvetica-Bold'
 
-
-def test_font_support():
-    """Тестирует поддержку русского языка и эмодзи в загруженном шрифте"""
-    test_text = "Тест русского текста 🧠📊👶💡"
-    try:
-        # Создаем временный параграф для тестирования
-        from reportlab.platypus import Paragraph
-        from reportlab.lib.styles import ParagraphStyle
-        
-        test_style = ParagraphStyle(
-            name='TestStyle',
-            fontName=FONT_NAME,
-            fontSize=10
-        )
-        
-        p = Paragraph(test_text, test_style)
-        print(f"✅ Шрифт {FONT_NAME} успешно поддерживает русский текст и эмодзи")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка с шрифтом {FONT_NAME}: {e}")
-        return False
-    
-    
 # Инициализируем шрифты
 FONT_NAME, FONT_BOLD = register_fonts()
-
-# Тестируем поддержку шрифта
-test_font_support()
-
 
 app = FastAPI()
 
@@ -152,74 +120,7 @@ class AnalysisRequest(BaseModel):
     survey: SurveyData
     task_id: str
     
-# Настройка стилей для PDF
-def setup_styles():
-    styles = getSampleStyleSheet()
-    
-    # Основной заголовок
-    styles.add(ParagraphStyle(
-        name='MainTitle',
-        fontName=FONT_BOLD,
-        fontSize=18,
-        leading=22,
-        alignment=TA_CENTER,
-        spaceAfter=20,
-        textColor=black
-    ))
-    
-    # Заголовок секции
-    styles.add(ParagraphStyle(
-        name='SectionHeader',
-        fontName=FONT_BOLD,
-        fontSize=14,
-        leading=18,
-        spaceBefore=15,
-        spaceAfter=10,
-        textColor=HexColor('#2E5BBA')
-    ))
-    
-    # Подзаголовок
-    styles.add(ParagraphStyle(
-        name='SubHeader',
-        fontName=FONT_BOLD,
-        fontSize=12,
-        leading=16,
-        spaceBefore=10,
-        spaceAfter=8,
-        textColor=HexColor('#444444')
-    ))
-    
-    # Обычный текст
-    styles.add(ParagraphStyle(
-        name='NormalText',
-        fontName=FONT_NAME,
-        fontSize=10,
-        leading=14,
-        alignment=TA_JUSTIFY,
-        spaceAfter=6
-    ))
-    
-    # Текст для таблиц
-    styles.add(ParagraphStyle(
-        name='TableText',
-        fontName=FONT_NAME,
-        fontSize=9,
-        leading=12,
-        alignment=TA_LEFT
-    ))
-    
-    # Стиль для рекомендаций
-    styles.add(ParagraphStyle(
-        name='Recommendation',
-        fontName=FONT_NAME,
-        fontSize=10,
-        leading=14,
-        leftIndent=15,
-        spaceAfter=8,
-        bulletIndent=10
-    ))
-    
-    return styles
+
 
 # Промпт для категории «Дом, Дерево, Человек»
 PROMPT_HOUSE_TREE_PERSON = """Перед тобой — скан или фотография рисунка на тему «Дом, дерево, человек». Твоя задача провести анализ в два этапа:
@@ -662,214 +563,104 @@ II. Анализ деталей фигуры:
 
 """.strip()
 
-def safe_text_encode(text):
-    """Безопасно кодирует текст для PDF, заменяя проблемные символы"""
-    if not text:
-        return ""
+def setup_pdf_styles():
+    """Настройка стилей для PDF с поддержкой кириллицы и эмодзи"""
+    styles = getSampleStyleSheet()
     
-    # Словарь замен для эмодзи если шрифт их не поддерживает
-    emoji_replacements = {
-        '🧠': '[МОЗГ]',
-        '📊': '[ГРАФИК]', 
-        '👶': '[РЕБЕНОК]',
-        '💡': '[ИДЕЯ]',
-        '📋': '[ОТЧЕТ]',
-        '🆔': 'ID',
-        '🎨': '[РИСУНОК]',
-        '📅': '[ДАТА]'
-    }
+    # Основной заголовок
+    styles.add(ParagraphStyle(
+        name='MainTitle',
+        fontName=FONT_BOLD,
+        fontSize=18,
+        leading=22,
+        alignment=TA_CENTER,
+        spaceAfter=20,
+        textColor=black
+    ))
     
-    # Если используем системный шрифт без поддержки эмодзи
-    if FONT_NAME in ['Helvetica', 'Times-Roman']:
-        for emoji, replacement in emoji_replacements.items():
-            text = text.replace(emoji, replacement)
+    # Заголовок секции
+    styles.add(ParagraphStyle(
+        name='SectionHeader',
+        fontName=FONT_BOLD,
+        fontSize=14,
+        leading=18,
+        spaceBefore=15,
+        spaceAfter=10,
+        textColor=HexColor('#2E5BBA')
+    ))
     
-    return text
+    # Подзаголовок
+    styles.add(ParagraphStyle(
+        name='SubHeader',
+        fontName=FONT_BOLD,
+        fontSize=12,
+        leading=16,
+        spaceBefore=10,
+        spaceAfter=8,
+        textColor=HexColor('#444444')
+    ))
+    
+    # Обычный текст
+    styles.add(ParagraphStyle(
+        name='NormalText',
+        fontName=FONT_NAME,
+        fontSize=10,
+        leading=14,
+        alignment=TA_JUSTIFY,
+        spaceAfter=6
+    ))
+    
+    return styles
 
-def create_child_info_section(task, styles):
-    """Создает секцию с информацией о ребенке"""
-    story = []
-    survey = task.get('survey', {})
-    
-    title = safe_text_encode("👶 Информация о ребенке")
-    story.append(Paragraph(title, styles['SectionHeader']))
-    
-    # Таблица с основной информацией
-    data = [
-        ['Имя ребенка:', safe_text_encode(survey.get('childName', 'Не указано'))],
-        ['Дата рождения:', safe_text_encode(survey.get('childDOB', 'Не указано'))],
-        ['Пол:', safe_text_encode(survey.get('childGender', 'Не указано'))],
-        ['Имя родителя:', safe_text_encode(survey.get('parentName', 'Не указано'))]
-    ]
-    
-    table = Table(data, colWidths=[4*cm, 8*cm])
-    table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), FONT_NAME),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-    ]))
-    
-    story.append(table)
-    story.append(Spacer(1, 15))
-    
-    return story
-
-def create_analysis_section(final_analysis, styles):
-    """Создает секцию анализа развития"""
-    story = []
-    title = safe_text_encode("🧠 Анализ развития")
-    story.append(Paragraph(title, styles['SectionHeader']))
-    
-    # Парсинг markdown анализа
-    if final_analysis:
-        safe_analysis = safe_text_encode(final_analysis)
-        flowables = parse_markdown_to_flowables(safe_analysis, styles)
-        story.extend(flowables)
-    
-    story.append(Spacer(1, 15))
-    return story
-
-def create_scores_section(task, styles):
-    """Создает секцию с баллами опросника"""
-    story = []
-    scores = task.get('survey_results', {}).get('scores', {})
-    
-    if not scores:
-        return story
-    
-    title = safe_text_encode("📊 Результаты опросника")
-    story.append(Paragraph(title, styles['SectionHeader']))
-    
-    # Создаем таблицу с баллами
-    data = [['Раздел', 'Балл из 50']]
-    
-    section_names = {
-        'section1': 'Раздел 1',
-        'section2': 'Раздел 2', 
-        'section3': 'Раздел 3',
-        'section4': 'Раздел 4',
-        'total': 'Итого'
-    }
-    
-    for section, score in scores.items():
-        section_display = section_names.get(section, section)
-        data.append([section_display, str(score)])
-    
-    table = Table(data, colWidths=[8*cm, 4*cm])
-    table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
-        ('FONTNAME', (0, 1), (-1, -1), FONT_NAME),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 1, HexColor('#CCCCCC')),
-        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#E8F4FD')),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    
-    story.append(table)
-    story.append(Spacer(1, 15))
-    
-    return story
-
-def create_drawing_analysis_section(task, styles):
-    """Создает секцию анализа рисунков"""
-    story = []
-    photo_results = task.get('photo_results', {})
-    
-    if not photo_results:
-        return story
-    
-    story.append(Paragraph("🎨 Анализ рисунков", styles['SectionHeader']))
-    
-    for drawing_name, analysis in photo_results.items():
-        story.append(Paragraph(f"<b>{drawing_name}:</b>", styles['SubHeader']))
-        story.append(Paragraph(analysis, styles['NormalText']))
-        story.append(Spacer(1, 8))
-    
-    story.append(Spacer(1, 15))
-    return story
-
-def create_recommendations_section(task, styles):
-    """Создает секцию рекомендаций"""
-    story = []
-    survey = task.get('survey', {})
-    
-    story.append(Paragraph("💡 Рекомендации для родителей", styles['SectionHeader']))
-    
-    # Рекомендации на основе данных опроса
-    recommendations = []
-    
-    if survey.get('specialists'):
-        recommendations.append(f"• Рекомендуется консультация со специалистами: {survey['specialists']}")
-    
-    if survey.get('attentionAreas'):
-        recommendations.append(f"• Области, требующие внимания: {survey['attentionAreas']}")
-    
-    if survey.get('strengths'):
-        recommendations.append(f"• Сильные стороны ребенка: {survey['strengths']}")
-    
-    if survey.get('developmentFeatures'):
-        recommendations.append(f"• Особенности развития: {survey['developmentFeatures']}")
-    
-    # Общие рекомендации
-    general_recommendations = [
-        "• Поддерживайте позитивную атмосферу в семье",
-        "• Уделяйте время совместным занятиям и играм",
-        "• Обращайте внимание на эмоциональное состояние ребенка",
-        "• При необходимости обращайтесь к детскому психологу для консультации",
-        "• Следите за режимом дня и качеством сна ребенка"
-    ]
-    
-    all_recommendations = recommendations + general_recommendations
-    
-    for rec in all_recommendations:
-        story.append(Paragraph(rec, styles['Recommendation']))
-    
-    story.append(Spacer(1, 15))
-    return story
-
-def parse_markdown_to_flowables(md_text, styles):
-    """Парсит Markdown и преобразует его в элементы ReportLab с поддержкой эмодзи"""
+def parse_markdown_to_pdf_elements(md_text, styles):
+    """Парсит Markdown и преобразует его в элементы ReportLab"""
     if not md_text:
         return []
     
+    # Конвертируем markdown в HTML
     html = markdown.markdown(md_text)
     soup = BeautifulSoup(html, 'html.parser')
-    flowables = []
+    
+    elements = []
     
     for element in soup.children:
         if hasattr(element, 'name'):
             if element.name == 'h1':
-                flowables.append(Paragraph(element.get_text(), styles['SectionHeader']))
+                elements.append(Paragraph(element.get_text(), styles['MainTitle']))
             elif element.name == 'h2':
-                flowables.append(Paragraph(element.get_text(), styles['SubHeader']))
+                elements.append(Paragraph(element.get_text(), styles['SectionHeader']))
+            elif element.name == 'h3':
+                elements.append(Paragraph(element.get_text(), styles['SubHeader']))
             elif element.name == 'p':
                 text = element.get_text()
                 if text.strip():
-                    flowables.append(Paragraph(text, styles['NormalText']))
+                    elements.append(Paragraph(text, styles['NormalText']))
             elif element.name == 'ul':
                 for li in element.find_all('li'):
                     text = li.get_text()
                     if text.strip():
-                        flowables.append(Paragraph(f"• {text}", styles['Recommendation']))
+                        elements.append(Paragraph(f"• {text}", styles['NormalText']))
+            elif element.name == 'ol':
+                for i, li in enumerate(element.find_all('li'), 1):
+                    text = li.get_text()
+                    if text.strip():
+                        elements.append(Paragraph(f"{i}. {text}", styles['NormalText']))
+            # Обработка таблиц (упрощенно - как обычный текст)
+            elif element.name == 'table':
+                elements.append(Paragraph("--- Таблица ---", styles['SubHeader']))
+                for row in element.find_all('tr'):
+                    row_text = " | ".join([cell.get_text().strip() for cell in row.find_all(['td', 'th'])])
+                    if row_text.strip():
+                        elements.append(Paragraph(row_text, styles['NormalText']))
         elif hasattr(element, 'strip') and element.strip():
-            flowables.append(Paragraph(element.strip(), styles['NormalText']))
+            # Обычный текст
+            elements.append(Paragraph(element.strip(), styles['NormalText']))
     
-    return flowables
+    return elements
 
-async def generate_pdf_report(task: dict, final_analysis: str):
-    """Генерирует PDF-отчёт с поддержкой эмодзи и улучшенным форматированием"""
-    pdf_path = f"report_{task['task_id']}.pdf"
+async def generate_pdf_from_openai_response(task_data: dict, openai_response: str):
+    """Генерирует PDF на основе ответа от OpenAI"""
+    pdf_path = f"report_{task_data['task_id']}.pdf"
     
     # Создаем документ
     doc = SimpleDocTemplate(
@@ -882,29 +673,21 @@ async def generate_pdf_report(task: dict, final_analysis: str):
     )
     
     # Получаем стили
-    styles = setup_styles()
+    styles = setup_pdf_styles()
     story = []
     
-    # Заголовок отчета с эмодзи
-    main_title = safe_text_encode("📋 Психологический отчёт о развитии ребенка")
-    task_id_text = safe_text_encode(f"🆔 ID отчета: {task['task_id']}")
+    # Добавляем ID отчета в начало
+    story.append(Paragraph(f"ID отчета: {task_data['task_id']}", styles['NormalText']))
+    story.append(Spacer(1, 10))
     
-    story.append(Paragraph(main_title, styles['MainTitle']))
-    story.append(Paragraph(task_id_text, styles['NormalText']))
-    story.append(Spacer(1, 20))
+    # Парсим ответ от OpenAI и конвертируем в элементы PDF
+    pdf_elements = parse_markdown_to_pdf_elements(openai_response, styles)
+    story.extend(pdf_elements)
     
-    # Основные секции отчета
-    story.extend(create_child_info_section(task, styles))
-    story.extend(create_analysis_section(final_analysis, styles))
-    story.extend(create_scores_section(task, styles))
-    story.extend(create_drawing_analysis_section(task, styles))
-    story.extend(create_recommendations_section(task, styles))
-    
-    # Подвал с датой создания
-    from datetime import datetime
+    # Добавляем дату создания в конец
     story.append(Spacer(1, 20))
     story.append(Paragraph(
-        f"📅 Отчет создан: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+        f"Отчет создан: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
         styles['NormalText']
     ))
     
@@ -915,7 +698,6 @@ async def generate_pdf_report(task: dict, final_analysis: str):
     except Exception as e:
         print(f"Ошибка при создании PDF: {e}")
         raise
-
 
 
 async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
@@ -1153,6 +935,7 @@ async def get_report(task_id: str):
 информация о ребёнке:
 психологический отчёт о ребёнке: {task["survey_results"]}
 результаты анализа фотографий: {task["photo_results"]}
+имя ребенка: {task["name"]}
 
 В ответе обязательно сделай отчет по примеру        
 пример того как нужно сделать отчет:  
@@ -1241,13 +1024,23 @@ async def get_report(task_id: str):
         
        
         try:
-            final_analysis = await request_openai(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
+            openai_report = await request_openai(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
+            print('OpenAI Report Generated:')
             print('--------------------------------------------')
-            print(final_analysis)
-            pdf_filename = await generate_pdf_report(task, final_analysis)
+            print(openai_report)
+            print('--------------------------------------------')
+            
+            # Генерируем PDF на основе ответа OpenAI
+            pdf_filename = await generate_pdf_from_openai_response(task, openai_report)
+            
             if not os.path.exists(pdf_filename):
                 raise HTTPException(status_code=500, detail="PDF файл не был создан")
-            return FileResponse(pdf_filename, media_type='application/pdf', filename=f"report_{task_id}.pdf")
+            
+            return FileResponse(
+                pdf_filename, 
+                media_type='application/pdf', 
+                filename=f"report_{task_id}.pdf"
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
     elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
