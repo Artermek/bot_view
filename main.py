@@ -5,51 +5,15 @@ import json
 import uuid
 import base64
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from openai import AsyncOpenAI
-from fastapi.responses import FileResponse
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.lib.colors import HexColor, black
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
 import markdown
-from bs4 import BeautifulSoup
+from pathlib import Path
 from datetime import datetime
-
-# Регистрируем шрифты с поддержкой русского языка и эмодзи
-def register_fonts():
-    """Регистрирует шрифты с поддержкой кириллицы и эмодзи"""
-    try:
-        # Попробуем загрузить Noto Sans (лучший выбор для эмодзи + кириллица)
-        pdfmetrics.registerFont(TTFont('NotoSans', 'fonts/NotoSans-Regular.ttf'))
-        pdfmetrics.registerFont(TTFont('NotoSans-Bold', 'fonts/NotoSans-Bold.ttf'))
-        return 'NotoSans', 'NotoSans-Bold'
-    except:
-        try:
-            # Fallback 1: DejaVu Sans (хорошая поддержка кириллицы)
-            pdfmetrics.registerFont(TTFont('DejaVuSans', 'fonts/DejaVuSans.ttf'))
-            pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', 'fonts/DejaVuSans-Bold.ttf'))
-            return 'DejaVuSans', 'DejaVuSans-Bold'
-        except:
-            try:
-                # Fallback 2: Liberation Sans (свободная альтернатива Arial)
-                pdfmetrics.registerFont(TTFont('LiberationSans', 'fonts/LiberationSans-Regular.ttf'))
-                pdfmetrics.registerFont(TTFont('LiberationSans-Bold', 'fonts/LiberationSans-Bold.ttf'))
-                return 'LiberationSans', 'LiberationSans-Bold'
-            except:
-                # Последний fallback - используем системные шрифты (без эмодзи)
-                print("Предупреждение: Не найдены шрифты с поддержкой кириллицы. Эмодзи могут не отображаться.")
-                return 'Helvetica', 'Helvetica-Bold'
-
-# Инициализируем шрифты
-FONT_NAME, FONT_BOLD = register_fonts()
+from weasyprint import HTML
 
 app = FastAPI()
 
@@ -563,141 +527,7 @@ II. Анализ деталей фигуры:
 
 """.strip()
 
-def setup_pdf_styles():
-    """Настройка стилей для PDF с поддержкой кириллицы и эмодзи"""
-    styles = getSampleStyleSheet()
-    
-    # Основной заголовок
-    styles.add(ParagraphStyle(
-        name='MainTitle',
-        fontName=FONT_BOLD,
-        fontSize=18,
-        leading=22,
-        alignment=TA_CENTER,
-        spaceAfter=20,
-        textColor=black
-    ))
-    
-    # Заголовок секции
-    styles.add(ParagraphStyle(
-        name='SectionHeader',
-        fontName=FONT_BOLD,
-        fontSize=14,
-        leading=18,
-        spaceBefore=15,
-        spaceAfter=10,
-        textColor=HexColor('#2E5BBA')
-    ))
-    
-    # Подзаголовок
-    styles.add(ParagraphStyle(
-        name='SubHeader',
-        fontName=FONT_BOLD,
-        fontSize=12,
-        leading=16,
-        spaceBefore=10,
-        spaceAfter=8,
-        textColor=HexColor('#444444')
-    ))
-    
-    # Обычный текст
-    styles.add(ParagraphStyle(
-        name='NormalText',
-        fontName=FONT_NAME,
-        fontSize=10,
-        leading=14,
-        alignment=TA_JUSTIFY,
-        spaceAfter=6
-    ))
-    
-    return styles
 
-def parse_markdown_to_pdf_elements(md_text, styles):
-    """Парсит Markdown и преобразует его в элементы ReportLab"""
-    if not md_text:
-        return []
-    
-    # Конвертируем markdown в HTML
-    html = markdown.markdown(md_text)
-    soup = BeautifulSoup(html, 'html.parser')
-    
-    elements = []
-    
-    for element in soup.children:
-        if hasattr(element, 'name'):
-            if element.name == 'h1':
-                elements.append(Paragraph(element.get_text(), styles['MainTitle']))
-            elif element.name == 'h2':
-                elements.append(Paragraph(element.get_text(), styles['SectionHeader']))
-            elif element.name == 'h3':
-                elements.append(Paragraph(element.get_text(), styles['SubHeader']))
-            elif element.name == 'p':
-                text = element.get_text()
-                if text.strip():
-                    elements.append(Paragraph(text, styles['NormalText']))
-            elif element.name == 'ul':
-                for li in element.find_all('li'):
-                    text = li.get_text()
-                    if text.strip():
-                        elements.append(Paragraph(f"• {text}", styles['NormalText']))
-            elif element.name == 'ol':
-                for i, li in enumerate(element.find_all('li'), 1):
-                    text = li.get_text()
-                    if text.strip():
-                        elements.append(Paragraph(f"{i}. {text}", styles['NormalText']))
-            # Обработка таблиц (упрощенно - как обычный текст)
-            elif element.name == 'table':
-                elements.append(Paragraph("--- Таблица ---", styles['SubHeader']))
-                for row in element.find_all('tr'):
-                    row_text = " | ".join([cell.get_text().strip() for cell in row.find_all(['td', 'th'])])
-                    if row_text.strip():
-                        elements.append(Paragraph(row_text, styles['NormalText']))
-        elif hasattr(element, 'strip') and element.strip():
-            # Обычный текст
-            elements.append(Paragraph(element.strip(), styles['NormalText']))
-    
-    return elements
-
-async def generate_pdf_from_openai_response(task_data: dict, openai_response: str):
-    """Генерирует PDF на основе ответа от OpenAI"""
-    pdf_path = f"report_{task_data['task_id']}.pdf"
-    
-    # Создаем документ
-    doc = SimpleDocTemplate(
-        pdf_path,
-        pagesize=A4,
-        leftMargin=2*cm,
-        rightMargin=2*cm,
-        topMargin=2*cm,
-        bottomMargin=2*cm
-    )
-    
-    # Получаем стили
-    styles = setup_pdf_styles()
-    story = []
-    
-    # Добавляем ID отчета в начало
-    story.append(Paragraph(f"ID отчета: {task_data['task_id']}", styles['NormalText']))
-    story.append(Spacer(1, 10))
-    
-    # Парсим ответ от OpenAI и конвертируем в элементы PDF
-    pdf_elements = parse_markdown_to_pdf_elements(openai_response, styles)
-    story.extend(pdf_elements)
-    
-    # Добавляем дату создания в конец
-    story.append(Spacer(1, 20))
-    story.append(Paragraph(
-        f"Отчет создан: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
-        styles['NormalText']
-    ))
-    
-    # Собираем документ
-    try:
-        doc.build(story)
-        return pdf_path
-    except Exception as e:
-        print(f"Ошибка при создании PDF: {e}")
-        raise
 
 
 async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
@@ -831,6 +661,83 @@ async def submit_survey(request: AnalysisRequest):
     asyncio.create_task(process_survey(task_id, request.survey))
     return {"message": "Опросник принят", "task_id": task_id}
 
+async def generate_pdf_from_openai_response(task_data: dict, openai_response: str):
+    """Генерирует PDF через WeasyPrint: markdown → HTML+CSS → PDF."""
+    pdf_path = f"report_{task_data['task_id']}.pdf"
+    twemoji_dir = Path(__file__).parent / 'twemoji-local'
+
+    # Словарь эмодзи → имя файла
+    emoji_to_filename = {
+        '📚': '1f4da.png',
+        '🔍': '1f50d.png',
+        '📖': '1f4d6.png',
+    }
+
+    # 1) Заменяем эмодзи в Markdown на теги <img>
+    md_with_images = openai_response
+    for emoji_char, filename in emoji_to_filename.items():
+        img_path = twemoji_dir / filename
+        img_uri = img_path.resolve().as_uri()
+        # Используем размер около 1.2em, чтобы масштабироваться вместе с текстом
+        img_tag = f'<img src="{img_uri}" style="width:1.2em; height:1.2em; vertical-align:text-bottom;">'
+        md_with_images = md_with_images.replace(emoji_char, img_tag)
+
+    # 2) Конвертируем Markdown в HTML
+    html_body = markdown.markdown(md_with_images, extensions=['tables', 'extra'])
+
+    # 3) Оборачиваем в HTML с CSS-стилями
+    html_with_css = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{
+          font-family: Arial, sans-serif;
+          margin: 20px;
+          line-height: 1.5;
+        }}
+        h1 {{ font-size: 24px; margin-bottom: 12px; }}
+        h2 {{ font-size: 20px; margin-top: 24px; margin-bottom: 8px; }}
+        h3 {{ font-size: 18px; margin-top: 16px; margin-bottom: 6px; }}
+        hr {{ border: none; border-top: 1px solid #ccc; margin: 16px 0; }}
+        pre, code {{
+          font-family: "Courier New", monospace;
+          background-color: #f9f9f9;
+          padding: 4px 6px;
+          border-radius: 4px;
+        }}
+        pre {{ white-space: pre-wrap; margin: 8px 0; }}
+        table {{
+          border-collapse: collapse;
+          width: 100%;
+          margin: 12px 0;
+        }}
+        th, td {{
+          border-bottom: 1px solid #ccc;
+          padding: 8px;
+          text-align: left;
+        }}
+        th {{
+          background-color: #f2f2f2;
+          border-top: 1px solid #ccc;
+        }}
+        b, strong {{ font-weight: bold; }}
+        img[style] {{ display: inline-block; }}
+      </style>
+    </head>
+    <body>
+      {html_body}
+      <p style="margin-top: 40px; font-size: 10px; color: #555;">
+        Отчет создан: {datetime.now().strftime('%d.%m.%Y %H:%M')}
+      </p>
+    </body>
+    </html>
+    """
+
+    # 4) Генерируем PDF через WeasyPrint
+    HTML(string=html_with_css).write_pdf(pdf_path)
+    return pdf_path
 
 
 @app.get("/report/{task_id}")
