@@ -695,7 +695,7 @@ async def generate_pdf_from_openai_response(task_data: dict, openai_response: st
         body {{
           font-family: Arial, sans-serif;
           margin: 20px;
-          line-height: 1.5;
+          line-height: 1.2;
         }}
         h1 {{ font-size: 24px; margin-bottom: 12px; }}
         h2 {{ font-size: 20px; margin-top: 24px; margin-bottom: 8px; }}
