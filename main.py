@@ -772,6 +772,7 @@ async def process_survey(task_id: str, survey: SurveyData):
     task_str = redis_client.get(task_id)
     if task_str:
         task = json.loads(task_str)
+        task["name"] = survey.childName
         task["survey_results"] = {"scores": scores, "analysis": analysis}
         task["survey_status"] = "done"
         redis_client.set(task_id, json.dumps(task))
