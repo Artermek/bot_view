@@ -528,9 +528,17 @@ II. Анализ деталей фигуры:
 """.strip()
 
 
+# Mock-функция для эмуляции OpenAI
+def mock_request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
+    if "анализ изображения" in user.lower():
+        return "Это предопределенный анализ изображения."
+    elif "анализ опросника" in user.lower():
+        return "Это предопределенный анализ опросника."
+    else:
+        return "Неизвестный запрос."
 
 
-async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
+async def real_request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
     client = AsyncOpenAI()
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
     try:
@@ -538,6 +546,9 @@ async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-1
         return response.choices[0].message.content
     except Exception as e:
         raise HTTPException(status_code=500, detail=f'Ошибка при запросе в OpenAI: {e}')
+    
+# Выбор функции в зависимости от режима
+request_openai = mock_request_openai if os.environ.get("TEST_MODE", "false").lower() == "true" else real_request_openai
 
 async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str):
     client = AsyncOpenAI()
