@@ -14,6 +14,7 @@ import markdown
 from pathlib import Path
 from datetime import datetime
 from weasyprint import HTML
+import logging
 
 app = FastAPI()
 
@@ -814,9 +815,10 @@ async def generate_pdf_from_openai_response(task_data: dict, openai_response: st
     </body>
     </html>
     """
-
+    
     # 4) Генерируем PDF через WeasyPrint
     HTML(string=html_with_css).write_pdf(pdf_path)
+    
     return pdf_path
 
 
@@ -1013,6 +1015,7 @@ async def get_report(task_id: str):
        
         try:
             openai_report = await request_openai(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
+            logging.info(f"Task ID: {task_id} | Ответ от mock_request_openai: {openai_report}")
             print('OpenAI Report Generated:')
             print('--------------------------------------------')
             print(openai_report)
@@ -1030,6 +1033,7 @@ async def get_report(task_id: str):
                 filename=f"report_{task_id}.pdf"
             )
         except Exception as e:
+            logging.error(f"Task ID: {task_id} | Ошибка: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
     elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
         return {"status": "error", "errors": task.get('photo_results', {}) | task.get('survey_results', {})}
