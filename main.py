@@ -530,7 +530,7 @@ II. Анализ деталей фигуры:
 
 
 
-async def request_openai(system: str, user: str, model: str = 'gpt-4.1-2025-04-14', temp: Optional[float] = None):
+async def request_openai(system: str, user: str, model: str = 'gpt-4.1-mini-2025-04-14', temp: Optional[float] = None):
     client = AsyncOpenAI()
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
     try:
@@ -547,7 +547,7 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
     ]
     try:
         resp = await client.chat.completions.create(
-            model="gpt-4.1-2025-04-14",
+            model="gpt-4.1-mini-2025-04-14",
             messages=[{'role': 'user', 'content': content}]
         )
         result = resp.choices[0].message.content
@@ -595,7 +595,7 @@ async def process_survey(task_id: str, survey: SurveyData):
     """
     
     try:
-        analysis = await request_openai(system=system_prompt, user=user_prompt, model='gpt-4.1-mini', temp=0.1)
+        analysis = await request_openai(system=system_prompt, user=user_prompt, model='gpt-4.1-mini-2025-04-14', temp=0.1)
     except Exception as e:
         analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
     
@@ -932,7 +932,7 @@ async def get_report(task_id: str):
         
        
         try:
-            openai_report = await request_openai(system=final_system, user=final_user, model='gpt-4.1-2025-04-14', temp=0)
+            openai_report = await request_openai(system=final_system, user=final_user, model='gpt-4.1-mini-2025-04-14', temp=0)
             print('OpenAI Report Generated:')
             print('--------------------------------------------')
             print(openai_report)
