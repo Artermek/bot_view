@@ -27,7 +27,12 @@ app.add_middleware(
 )
 
 # Подключение к Redis
-redis_client = redis.Redis.from_url(os.environ.get("REDISCLOUD_URL"), decode_responses=True)
+REDIS_URL = os.getenv("REDISCLOUD_URL")
+redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)  # один пул на процесс
+redis_client = redis.Redis(connection_pool=redis_pool)
+
+# Сколько времени храним одну задачу в Redis (по умолчанию сутки)
+TASK_TTL_SECONDS = int(os.getenv("TASK_TTL_SECONDS", "43200"))  # 12 ч
 
 class SurveyData(BaseModel):
     childName: str
@@ -528,6 +533,24 @@ II. Анализ деталей фигуры:
 """.strip()
 
 
+def save_task(task_id: str, task_obj: dict) -> None:
+    """Сохраняем объект с TTL, ловим OutOfMemoryError."""
+    serialized = json.dumps(task_obj, separators=(",", ":"))
+    try:
+        redis_client.set(task_id, serialized, ex=TASK_TTL_SECONDS, keepttl=True)
+    except redis.exceptions.ResponseError:      # если KEEPTTL не поддерживается
+        redis_client.set(task_id, serialized, ex=TASK_TTL_SECONDS)
+    except redis.exceptions.OutOfMemoryError as e:
+        raise HTTPException(status_code=503, detail="Redis исчерпал память: " + str(e))
+
+def load_task(task_id: str) -> dict:
+    raw = redis_client.get(task_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return json.loads(raw)
+
+
+
 
 
 async def request_openai(system: str, user: str, model: str = 'gpt-4.1-mini-2025-04-14', temp: Optional[float] = None):
@@ -551,13 +574,13 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
             messages=[{'role': 'user', 'content': content}]
         )
         result = resp.choices[0].message.content
-        task_str = redis_client.get(task_id)
+        task = load_task(task_id)
         if task_str:
             task = json.loads(task_str)
             task["photo_results"][key] = result
             if all(isinstance(v, str) for v in task['photo_results'].values()):
                 task['photo_status'] = 'done'
-            redis_client.set(task_id, json.dumps(task))
+            save_task(task_id, task)
         else:
             raise HTTPException(status_code=404, detail="Task not found")
     except Exception as e:
@@ -566,7 +589,7 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
             task = json.loads(task_str)
             task['photo_results'][key] = {'error': str(e)}
             task['photo_status'] = 'error'
-            redis_client.set(task_id, json.dumps(task))
+            save_task(task_id, task)
         else:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -599,15 +622,15 @@ async def process_survey(task_id: str, survey: SurveyData):
     except Exception as e:
         analysis = f"Ошибка при анализе открытых вопросов: {str(e)}"
     
-    task_str = redis_client.get(task_id)
-    if task_str:
-        task = json.loads(task_str)
-        task["name"] = survey.childName
-        task["survey_results"] = {"scores": scores, "analysis": analysis}
-        task["survey_status"] = "done"
-        redis_client.set(task_id, json.dumps(task))
-    else:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = load_task(task_id)
+    task.update(
+        {
+            "name": survey.childName,
+            "survey_results": {"scores": scores, "analysis": analysis},
+            "survey_status": "done",
+        }
+    )
+    save_task(task_id, task)
 
 def calculate_survey_scores(survey_data: Dict[str, str]) -> Dict[str, int]:
     sections = {
@@ -635,14 +658,14 @@ async def upload_images(files: List[UploadFile] = File(...)):
         b64 = base64.b64encode(data).decode()
         encoded.append((f.content_type, b64))
     task_id = str(uuid.uuid4())
-    task = {
+    task_obj = {
         'task_id': task_id,
         'photo_status': 'processing',
         'photo_results': {'image1': None, 'image2': None, 'image3': None},
         'survey_status': 'pending',
         'survey_results': None
     }
-    redis_client.set(task_id, json.dumps(task))
+    save_task(task_id, task_obj)
     prompts = [PROMPT_HOUSE_TREE_PERSON, PROMPT_ANIMAL, PROMPT_SELF_PORTRAIT]
     for idx, (mime, b64) in enumerate(encoded, start=1):
         key = f'image{idx}'
@@ -650,15 +673,12 @@ async def upload_images(files: List[UploadFile] = File(...)):
     return JSONResponse(status_code=202, content={'task_id': task_id, 'status': 'фотографии в обработке'})
 
 @app.post("/submit-survey")
-async def submit_survey(request: AnalysisRequest):
-    task_id = request.task_id
-    if not redis_client.exists(task_id):
-        raise HTTPException(status_code=404, detail="Task not found")
-    task_str = redis_client.get(task_id)
-    task = json.loads(task_str)
-    if task['survey_status'] != 'pending':
-        raise HTTPException(status_code=400, detail="Опросник уже отправлен или обработан")
-    asyncio.create_task(process_survey(task_id, request.survey))
+async def submit_survey(req: AnalysisRequest):
+    task_id = req.task_id
+    task = load_task(task_id)
+    if task["survey_status"] != "pending":
+        raise HTTPException(status_code=400, detail="Опросник уже обработан")
+    asyncio.create_task(process_survey(task_id, req.survey))
     return {"message": "Опросник принят", "task_id": task_id}
 
 async def generate_pdf_from_openai_response(task_data: dict, openai_response: str):
@@ -742,11 +762,9 @@ async def generate_pdf_from_openai_response(task_data: dict, openai_response: st
 
 @app.get("/report/{task_id}")
 async def get_report(task_id: str):
-    if not redis_client.exists(task_id):
-        raise HTTPException(status_code=404, detail="Task not found")
-    task_str = redis_client.get(task_id)
-    task = json.loads(task_str)
-    if task['photo_status'] == 'done' and task['survey_status'] == 'done':
+    task = load_task(task_id)
+
+    if task["photo_status"] == "done" and task["survey_status"] == "done":
         
         final_system = f'''  
         Ты — опытный психолог, анализирующий результаты анализа фотографий и психологического отчёта о ребёнке.
