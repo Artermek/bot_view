@@ -31,7 +31,7 @@ REDIS_URL = os.getenv("REDISCLOUD_URL")
 redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)  # один пул на процесс
 redis_client = redis.Redis(connection_pool=redis_pool)
 
-# Сколько времени храним одну задачу в Redis (по умолчанию сутки)
+# Сколько времени храним одну задачу в Redis (по умолчанию 12 ч)
 TASK_TTL_SECONDS = int(os.getenv("TASK_TTL_SECONDS", "43200"))  # 12 ч
 
 class SurveyData(BaseModel):
@@ -534,18 +534,47 @@ II. Анализ деталей фигуры:
 
 
 def save_task(task_id: str, task_obj: dict) -> None:
-    """Сохраняем объект с TTL, ловим OutOfMemoryError."""
+    """
+    Создать новую или обновить существующую запись о задаче.
+    • Новому ключу → TTL = TASK_TTL_SECONDS.
+    • Существующему ключу → значение меняем, TTL оставляем прежнюю.
+    """
     serialized = json.dumps(task_obj, separators=(",", ":"))
+
     try:
-        redis_client.set(task_id, serialized, ex=TASK_TTL_SECONDS, keepttl=True)
-    except redis.exceptions.ResponseError:      # если KEEPTTL не поддерживается
+        # 1️⃣ попытка: обновить ТОЛЬКО если ключ уже существует (XX) и сохранить TTL
+        updated = redis_client.set(
+            task_id,
+            serialized,
+            keepttl=True,   # не трогаем TTL
+            xx=True         # сделать, только если ключ есть
+        )
+
+        if not updated:
+            # 2️⃣ ключа нет → создаём с новой TTL
+            redis_client.set(
+                task_id,
+                serialized,
+                ex=TASK_TTL_SECONDS,  # задать TTL
+                nx=True               # сделать, только если ключа нет
+            )
+
+    # ─── fallbacks ──────────────────────────────────────────────
+    except (DataError, ResponseError):
+        # Клиент или сервер не поддерживают KEEPTTL / XX / NX ➜ пишем с новой TTL
         redis_client.set(task_id, serialized, ex=TASK_TTL_SECONDS)
-    except redis.exceptions.OutOfMemoryError as e:
-        raise HTTPException(status_code=503, detail="Redis исчерпал память: " + str(e))
+
+    except OutOfMemoryError as e:
+        # Redis переполнен — возвращаем 503 пользователю
+        raise HTTPException(
+            status_code=503,
+            detail=f"Redis исчерпал память: {e}"
+        )
 
 def load_task(task_id: str) -> dict:
+    """Получить задачу по ID или 404, если её нет."""
     raw = redis_client.get(task_id)
-    if not raw:
+    if raw is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return json.loads(raw)
 
@@ -571,27 +600,25 @@ async def process_image(task_id: str, key: str, mime: str, b64: str, prompt: str
     try:
         resp = await client.chat.completions.create(
             model="gpt-4.1-mini-2025-04-14",
-            messages=[{'role': 'user', 'content': content}]
+            messages=[{"role": "user", "content": content}]
         )
         result = resp.choices[0].message.content
-        task = load_task(task_id)
-        if task_str:
-            task = json.loads(task_str)
-            task["photo_results"][key] = result
-            if all(isinstance(v, str) for v in task['photo_results'].values()):
-                task['photo_status'] = 'done'
-            save_task(task_id, task)
-        else:
-            raise HTTPException(status_code=404, detail="Task not found")
+
+        task = load_task(task_id)                     # ① читаем
+        task["photo_results"][key] = result           # ② меняем
+        if all(isinstance(v, str) for v in task["photo_results"].values()):
+            task["photo_status"] = "done"
+        save_task(task_id, task)                      # ③ атомично сохраняем
+
     except Exception as e:
-        task_str = redis_client.get(task_id)
-        if task_str:
-            task = json.loads(task_str)
-            task['photo_results'][key] = {'error': str(e)}
-            task['photo_status'] = 'error'
-            save_task(task_id, task)
-        else:
-            raise HTTPException(status_code=404, detail="Task not found")
+        # Обновим задачу с пометкой об ошибке
+        try:
+            task = load_task(task_id)
+        except HTTPException:
+            raise                                  # ключ пропал – дадим 404
+        task["photo_results"][key] = {"error": str(e)}
+        task["photo_status"] = "error"
+        save_task(task_id, task)
 
 async def process_survey(task_id: str, survey: SurveyData):
     survey_dict = survey.dict()
