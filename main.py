@@ -15,6 +15,8 @@ from pathlib import Path
 from datetime import datetime
 from weasyprint import HTML
 
+from fastapi.responses import JSONResponse
+
 app = FastAPI()
 
 # Настройка CORS
@@ -787,7 +789,7 @@ async def generate_pdf_from_openai_response(task_data: dict, openai_response: st
     return pdf_path
 
 
-@app.get("/report/{task_id}")
+@app.get("/report/{task_id}", response_class=JSONResponse)
 async def get_report(task_id: str):
     task = load_task(task_id)
 
@@ -984,21 +986,23 @@ async def get_report(task_id: str):
             print('--------------------------------------------')
             
             # Генерируем PDF на основе ответа OpenAI
-            pdf_filename = await generate_pdf_from_openai_response(task, openai_report)
+            #pdf_filename = await generate_pdf_from_openai_response(task, openai_report)
             
-            if not os.path.exists(pdf_filename):
-                raise HTTPException(status_code=500, detail="PDF файл не был создан")
+            #if not os.path.exists(pdf_filename):
+            #    raise HTTPException(status_code=500, detail="PDF файл не был создан")
+            task["final_report"] = openai_report
+            save_task(task_id, task)
+
+            return {"report": openai_report}
+                #pdf_filename, 
+                #media_type='application/pdf', 
+                #filename=f"report_{task_id}.pdf"
             
-            return FileResponse(
-                pdf_filename, 
-                media_type='application/pdf', 
-                filename=f"report_{task_id}.pdf"
-            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
     elif task['photo_status'] == 'error' or task['survey_status'] == 'error':
         return {"status": "error", "errors": task.get('photo_results', {}) | task.get('survey_results', {})}
     else:
-        return {"status": "в обработке"}
+        return {"status": "inProgress"}
     
     
