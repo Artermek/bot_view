@@ -816,8 +816,6 @@ async def get_report(task_id: str):
 
             {
             "task_id": "123e4567-e89b-12d3-a456-426614174000",
-            "generated_at": "2025-01-01T10:00:00+02:00",
-
             "child": {
                 "name": "Артём"
             },
