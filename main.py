@@ -19,6 +19,10 @@ import textwrap
 
 from fastapi.responses import JSONResponse
 
+import uuid, os, mimetypes
+import boto3
+from botocore.config import Config
+
 app = FastAPI()
 
 # Настройка CORS
@@ -29,6 +33,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
+# --- окружение ---
+BUCKET   = os.getenv("AWS_BUCKET")
+REGION   = os.getenv("AWS_REGION")
+ENDPOINT = os.getenv("AWS_ENDPOINT_URL")  # '' для AWS
+
+
+session = boto3.session.Session()
+s3 = session.client(
+    "s3",
+    region_name=REGION,
+    endpoint_url=ENDPOINT or None,
+    config=Config(s3={"addressing_style": "virtual"})
+)
+
+
+
 
 # Подключение к Redis
 REDIS_URL = os.getenv("REDISCLOUD_URL")
@@ -915,3 +938,32 @@ async def get_report(task_id: str):
         return {"status": "inProgress"}
     
     
+
+@app.post("/upload-pdf", status_code=201)
+async def upload(file: UploadFile):
+    # 1. валидация контента
+    if file.content_type not in {"image/png", "image/jpeg", "application/pdf"}:
+        raise HTTPException(415, "Unsupported media type")
+
+    # 2. уникальное имя
+    ext = mimetypes.guess_extension(file.content_type) or ""
+    key = f"uploads/{uuid.uuid4().hex}{ext}"
+
+    # 3. загрузка в S3
+    body = await file.read()
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=body,
+        ContentType=file.content_type,
+        ACL="public-read"          # 👉 или уберите и используйте presigned_url
+    )
+
+    # 4. финальная ссылка
+    if ENDPOINT:  # Backblaze/Spaces
+        base = ENDPOINT.replace("https://", f"https://{BUCKET}.")
+        url  = f"{base}/{key}"
+    else:         # AWS
+        url  = f"https://{BUCKET}.s3.{REGION}.amazonaws.com/{key}"
+
+    return {"url": url}
