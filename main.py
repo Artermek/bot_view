@@ -43,10 +43,12 @@ ENDPOINT = os.getenv("AWS_ENDPOINT_URL")  # '' для AWS
 
 
 session = boto3.session.Session()
-s3 = session.client(
+s3 = boto3.client(
     "s3",
-    region_name=REGION,
-    endpoint_url=ENDPOINT or None,
+    endpoint_url=ENDPOINT,           # https://<account>.r2.cloudflarestorage.com
+    region_name="auto",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     config=Config(s3={"addressing_style": "virtual"})
 )
 
@@ -915,29 +917,21 @@ async def get_report(task_id: str):
 
 @app.post("/upload-pdf", status_code=201)
 async def upload(file: UploadFile):
-    # 1. валидация контента
     if file.content_type not in {"image/png", "image/jpeg", "application/pdf"}:
         raise HTTPException(415, "Unsupported media type")
 
-    # 2. уникальное имя
     ext = mimetypes.guess_extension(file.content_type) or ""
     key = f"uploads/{uuid.uuid4().hex}{ext}"
 
-    # 3. загрузка в S3
     body = await file.read()
     s3.put_object(
         Bucket=BUCKET,
         Key=key,
         Body=body,
-        ContentType=file.content_type,
-        ACL="public-read"          # 👉 или уберите и используйте presigned_url
+        ContentType=file.content_type
+        # ⚠️ ACL НЕ НУЖЕН для R2
     )
 
-    # 4. финальная ссылка
-    if ENDPOINT:  # Backblaze/Spaces
-        base = ENDPOINT.replace("https://", f"https://{BUCKET}.")
-        url  = f"{base}/{key}"
-    else:         # AWS
-        url  = f"https://{BUCKET}.s3.{REGION}.amazonaws.com/{key}"
-
+    # ссылка
+    url = f"https://{BUCKET}.{ENDPOINT.removeprefix('https://')}/{key}"
     return {"url": url}
