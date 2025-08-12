@@ -38,8 +38,7 @@ app.add_middleware(
 
 # --- окружение ---
 BUCKET   = os.getenv("AWS_BUCKET")
-REGION   = os.getenv("AWS_REGION")
-ENDPOINT = os.getenv("AWS_ENDPOINT_URL")  # '' для AWS
+ENDPOINT = os.getenv("AWS_ENDPOINT_URL")
 
 
 session = boto3.session.Session()
@@ -51,7 +50,6 @@ s3 = boto3.client(
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     config=Config(s3={"addressing_style": "virtual"})
 )
-
 
 
 
@@ -929,9 +927,13 @@ async def upload(file: UploadFile):
         Key=key,
         Body=body,
         ContentType=file.content_type
-        # ⚠️ ACL НЕ НУЖЕН для R2
+        # ACL не указываем для R2
     )
 
-    # ссылка
-    url = f"https://{BUCKET}.{ENDPOINT.removeprefix('https://')}/{key}"
+    # Выдаём ВРЕМЕННУЮ ссылку (работает даже при приватном бакете)
+    url = s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": BUCKET, "Key": key},
+        ExpiresIn=36000  # 10 час; можешь поставить, например, 86400 (сутки)
+    )
     return {"url": url}

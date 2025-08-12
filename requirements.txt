@@ -24,4 +24,4 @@ markdown
 beautifulsoup4>=4.12.0
 weasyprint
 
-boto3
+boto3>=1.34
